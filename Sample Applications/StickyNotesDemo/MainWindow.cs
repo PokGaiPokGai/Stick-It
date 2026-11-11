@@ -1,527 +1,148 @@
-// Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
-
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
-using System.Windows.Markup;
+using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 
-namespace StickyNotesDemo
+namespace StickyNotesDemo;
+
+public partial class MainWindow : Window
 {
-    /// <summary>
-    ///     Interaction logic for MainWindow.xaml
-    /// </summary>
-    public partial class MainWindow : Window
+    private readonly NoteStore store;
+    private readonly List<Window2> notes=new();
+    private readonly DispatcherTimer saveTimer;
+    private System.Windows.Forms.NotifyIcon tray;
+    private System.Windows.Forms.ContextMenuStrip trayMenu;
+    private System.Drawing.Icon trayArtwork;
+    private HwndSource source;
+    private bool hotkeyRegistered;
+    private bool exiting;
+
+    public MainWindow(NoteStore store)
     {
-        private DispatcherTimer _alarmTimer;
-        private System.Windows.Forms.NotifyIcon _trayIcon;
-        private System.Windows.Forms.ContextMenuStrip _trayMenu;
-        private System.Drawing.Icon _applicationIcon;
-        private string[] _windowContents;
+        this.store=store;
+        InitializeComponent();
+        saveTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(600) };
+        saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
+    }
+    public void Start()
+    {
+        foreach (var data in store.Load()) AddNote(data);
+        using (var stream=Application.GetResourceStream(new Uri("pack://application:,,,/Stick It;component/Assets/StickIt.ico")).Stream)
+        using (var icon=new System.Drawing.Icon(stream)) trayArtwork=(System.Drawing.Icon)icon.Clone();
+        trayMenu=new System.Windows.Forms.ContextMenuStrip();
+        trayMenu.Items.Add("打开便签列表",null,(_,_)=>ShowLibrary());
+        trayMenu.Items.Add("新建便签    Shift + Alt + W",null,(_,_)=>CreateNote());
+        trayMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        trayMenu.Items.Add("保存并退出",null,(_,_)=>ExitApp());
+        tray=new System.Windows.Forms.NotifyIcon { Text="Stick It", Icon=trayArtwork, ContextMenuStrip=trayMenu, Visible=true };
+        tray.MouseClick += (_,e)=> { if(e.Button==System.Windows.Forms.MouseButtons.Left) ShowLibrary(); };
+        ShowLibrary();
+        foreach (var note in notes.Where(n=>n.Data.IsOpen)) note.Open();
+        RefreshList();
+    }
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        source=HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        source.AddHook(WindowMessage);
+        hotkeyRegistered=DesktopIntegration.RegisterHotKey(source.Handle,DesktopIntegration.HotkeyId,DesktopIntegration.HotkeyModifiers,DesktopIntegration.HotkeyKey);
+        if(!hotkeyRegistered) Report("Shift + Alt + W 注册失败，可能已被其他程序占用。仍可用 + 或托盘新建便签。");
+    }
+    private IntPtr WindowMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam,ref bool handled)
+    {
+        if(message==0x0312 && wParam.ToInt32()==DesktopIntegration.HotkeyId) { CreateNote(); handled=true; }
+        return IntPtr.Zero;
+    }
+    private Window2 AddNote(NoteData data)
+    {
+        var note=new Window2(data); notes.Add(note);
+        note.Changed+=OnNoteChanged;
+        note.DeleteRequested+=()=>DeleteNote(note);
+        return note;
+    }
+    private void CreateNote()
+    {
+        var note=AddNote(new NoteData { Pinned=true });
+        DesktopIntegration.PlaceAtCursor(note);
+        note.Open(edit:true);
+        OnNoteChanged();
+    }
+    private void OnNoteChanged()
+    {
+        if(exiting) return;
+        RefreshList(); saveTimer.Stop(); saveTimer.Start();
+    }
+    public void ShowLibrary() { ShowInTaskbar=true; Show(); WindowState=WindowState.Normal; Activate(); RefreshList(); }
+    private void RefreshList()
+    {
+        if(NoteList==null) return;
+        var query=SearchBox.Text.Trim();
+        var rows=notes.Where(n=>n.Data.Markdown.Contains(query,StringComparison.CurrentCultureIgnoreCase))
+            .OrderByDescending(n=>n.Data.Modified).Select(n=>new NoteCard(n)).ToArray();
+        NoteList.ItemsSource=rows;
+        SearchHint.Visibility=query.Length==0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility=rows.Length==0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyTitle.Text=query.Length==0 ? "还没有便签" : "没有找到匹配的便签";
+    }
+    private bool Save()
+    {
+        try { store.Save(notes.Select(n=>n.Data).ToList()); return true; }
+        catch(Exception error) when(error is IOException || error is UnauthorizedAccessException)
+        { Report("便签未能保存："+error.Message); return false; }
+    }
+    private void Report(string message) { StatusText.Text=message; StatusText.Visibility=Visibility.Visible; }
+    private void DeleteNote(Window2 note)
+    {
+        if(MessageBox.Show("删除这张便签？", "Stick It", MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes) return;
+        notes.Remove(note); note.DisposeWindow(); OnNoteChanged();
+    }
+    private void ExitApp()
+    {
+        saveTimer.Stop();
+        if(!Save()) { ShowLibrary(); return; }
+        exiting=true;
+        if(hotkeyRegistered) DesktopIntegration.UnregisterHotKey(source.Handle,DesktopIntegration.HotkeyId);
+        source?.RemoveHook(WindowMessage);
+        tray.Dispose(); trayMenu.Dispose(); trayArtwork.Dispose();
+        foreach(var note in notes) note.DisposeWindow();
+        Close(); Application.Current.Shutdown();
+    }
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if(!exiting) { e.Cancel=true; if(Save()) { Hide(); ShowInTaskbar=false; } }
+        base.OnClosing(e);
+    }
+    private void DragTitle(object sender,MouseButtonEventArgs e) { if(e.ButtonState==MouseButtonState.Pressed) DragMove(); }
+    private void NewNoteClick(object sender,RoutedEventArgs e)=>CreateNote();
+    private void CloseClick(object sender,RoutedEventArgs e)=>Close();
+    private void SettingsClick(object sender,RoutedEventArgs e) { var button=(Button)sender; button.ContextMenu.PlacementTarget=button; button.ContextMenu.IsOpen=true; }
+    private void SearchChanged(object sender,TextChangedEventArgs e)=>RefreshList();
+    private void OpenCard(object sender,RoutedEventArgs e)=>((Window2)((Button)sender).Tag).Open(edit:true);
+    private void DeleteCard(object sender,RoutedEventArgs e) { var menu=(ContextMenu)((MenuItem)sender).Parent; DeleteNote((Window2)((Button)menu.PlacementTarget).Tag); }
+    private void SaveClick(object sender,RoutedEventArgs e)=>Save();
+    private void ExitClick(object sender,RoutedEventArgs e)=>ExitApp();
+}
 
-        public MainWindow()
-        {
-            InitializeComponent();
-        }
-
-        public int ArrayPos { get; set; }
-        public object[] WindowArray { get; private set; }
-
-        public void InitializeNotes()
-        {
-            WindowArray = new object[100];
-
-            _alarmTimer = new DispatcherTimer
-            {
-                Interval = new TimeSpan(0, 30, 0),
-                IsEnabled = true
-            };
-            _alarmTimer.Tick += AlarmTimer_Tick;
-
-            var firstRun = !File.Exists("NotesFile");
-            LoadNotes();
-            if (firstRun) CreateNote();
-
-            using (var stream = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/StickIt.ico")).Stream)
-            using (var icon = new System.Drawing.Icon(stream))
-                _applicationIcon = (System.Drawing.Icon)icon.Clone();
-
-            _trayMenu = new System.Windows.Forms.ContextMenuStrip();
-            _trayMenu.Items.Add("新建便签", null, (_, _) => CreateNote());
-            _trayMenu.Items.Add("显示所有便签", null, (_, _) => ShowNotes());
-            _trayMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            _trayMenu.Items.Add("保存并退出", null, (_, _) => Close());
-            _trayIcon = new System.Windows.Forms.NotifyIcon
-            {
-                Text = "Stick It",
-                Icon = _applicationIcon,
-                ContextMenuStrip = _trayMenu,
-                Visible = true
-            };
-            _trayIcon.DoubleClick += (_, _) => ShowNotes();
-            Closing += MainWindow_Closing;
-            Closed += (_, _) =>
-            {
-                _alarmTimer.Stop();
-                _trayIcon.Dispose();
-                _trayMenu.Dispose();
-                _applicationIcon.Dispose();
-            };
-        }
-
-        private void ShowNotes()
-        {
-            var hasNotes = false;
-            foreach (Window2 note in WindowArray)
-            {
-                if (note == null) continue;
-                hasNotes = true;
-                note.Show();
-                note.WindowState = WindowState.Normal;
-                note.Activate();
-            }
-            if (!hasNotes) CreateNote();
-        }
-
-        private void LoadNotes()
-        {
-            var count = 0;
-            if (File.Exists("NotesFile"))
-            {
-                var fs = new FileStream("NotesFile", FileMode.Open);
-                
-                int contentIndicator;
-                double height;
-                double width;
-                double x;
-                double y;
-                bool topmost;
-                int backgroundColorIndex;
-                int foregroundColorIndex;
-                DateTime alarmTime;
-                string loadRepeatNumber;
-
-                var reader = new StreamReader(fs);
-                var str = reader.ReadLine();
-                ExtractValues(out contentIndicator, str, out height, out width, out x, out y, out topmost,
-                    out backgroundColorIndex,
-                    out foregroundColorIndex, out alarmTime, out loadRepeatNumber);
-                AppWindow.Height = height;
-                AppWindow.Width = width;
-                AppWindow.Top = y;
-                AppWindow.Left = x;
-                AppWindow.Topmost = topmost;
-
-                count = contentIndicator;
-                for (var i = 0; i < count; i++)
-                {
-                    var line = reader.ReadLine();
-
-                    ExtractValues(out contentIndicator, line, out height, out width, out x, out y, out topmost,
-                        out backgroundColorIndex, out foregroundColorIndex, out alarmTime, out loadRepeatNumber);
-
-                    var filename = i.ToString();
-                    filename = filename.Trim();
-
-                    var w2 = new Window2
-                    {
-                        Title = "Stick It",
-                        Tag = ArrayPos,
-                        Height = height,
-                        Width = width,
-                        Left = x,
-                        Top = y,
-                        ShowInTaskbar = false,
-                        Topmost = topmost,
-                        TopmostWindow = topmost
-                    };
-
-                    if (w2.Topmost)
-                    {
-                        try
-                        {
-                            var m = LogicalTreeHelper.FindLogicalNode(w2, "AlwaysOnTop") as MenuItem;
-                            m.IsChecked = true;
-                        }
-                        catch (Exception)
-                        {
-                        }
-                    }
-                    if (backgroundColorIndex > -1)
-                    {
-                        w2.Background = Window2.ChangeBackgroundColor(Dialog.ColorArray[backgroundColorIndex]);
-                        w2.BackgroundColorIndex = backgroundColorIndex;
-                    }
-                    if (foregroundColorIndex > -1)
-                    {
-                        w2.Foreground = Dialog.ColorArrayForeground[foregroundColorIndex];
-                        w2.ForegroundColorIndex = foregroundColorIndex;
-                    }
-                    w2.Alarm = alarmTime;
-                    w2.RepetitionNumber = loadRepeatNumber.Contains("null") ? "null" : loadRepeatNumber;
-
-
-                    CheckIfAlarmFires(w2);
-
-                    WindowArray[ArrayPos] = w2;
-                    ArrayPos++;
-
-                    var noteFiles = new FileStream(filename, FileMode.Open);
-
-                    var rtb = ((RichTextBox) ((StackPanel) (w2.Content)).Children[1]);
-                    var tr = new TextRange(rtb.Document.ContentStart, rtb.Document.ContentEnd);
-                    try
-                    {
-                        tr.Load(noteFiles, contentIndicator == 0 ? DataFormats.XamlPackage : DataFormats.Xaml);
-                    }
-                    catch (Exception)
-                    {
-                    }
-                    noteFiles.Close();
-                }
-                fs.Close();                
-            }
-            for (var i = ++count; i < 100; i++)
-            {
-                if (File.Exists(i.ToString()))
-                {
-                    File.Delete(i.ToString());
-                }
-            }
-        }
-
-        private void ExtractValues(out int contentIndicator, string line, out double height, out double width,
-            out double x,
-            out double y, out bool topmost, out int backgroundColorIndex, out int foregroundColorIndex,
-            out DateTime alarmTime,
-            out string loadRepeatNumber)
-        {
-            var index = line.IndexOf('|');
-            var firstToken = line.Substring(0, index);
-            contentIndicator = int.Parse(firstToken);
-
-            var tail = index + 1;
-            index = line.IndexOf('|', tail);
-            y = GetStoredValues(line, index, tail);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            x = GetStoredValues(line, index, tail);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            height = GetStoredValues(line, index, tail);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            width = GetStoredValues(line, index, tail);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            var token = line.Substring(tail, (index - tail));
-            topmost = (token.Contains(bool.TrueString)) ? true : false;
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            token = line.Substring(tail, (index - tail));
-            backgroundColorIndex = int.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail); //line.Length;
-            token = line.Substring(tail, (index - tail));
-            foregroundColorIndex = int.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf(':', tail);
-            token = line.Substring(tail, (index - tail));
-            var hours = int.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf(':', tail);
-            token = line.Substring(tail, (index - tail));
-            var minutes = int.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            token = line.Substring(tail, (index - tail));
-            var seconds = (int) double.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf('|', tail);
-            var date = DateTime.Parse(line.Substring(tail, index - tail));
-            alarmTime = date.Date.AddHours(hours).AddMinutes(minutes).AddSeconds(seconds);
-
-            tail = index + 1;
-            index = line.Length;
-            loadRepeatNumber = line.Substring(tail, (index - tail));
-        }
-
-        private double GetStoredValues(string line, int index, int tail)
-        {
-            var token = line.Substring(tail, (index - tail));
-            return double.Parse(token);
-        }
-
-        private void MainWindow_Closing(object sender, CancelEventArgs e)
-        {
-            var contentIndicator = new string[ArrayPos];
-
-            var index = 0;
-
-            for (var i = 0; i < ArrayPos; i++)
-            {
-                if (WindowArray[i] != null)
-                {
-                    var w = ((Window2) (WindowArray[i]));
-                    var rtb = ((RichTextBox) (((StackPanel) (w.Content)).Children[1]));
-                    var tr = new TextRange(rtb.Document.ContentStart, rtb.Document.ContentEnd);
-
-                    var mStream = new MemoryStream();
-                    XamlWriter.Save(rtb.Document, mStream);
-                    mStream.Seek(0, SeekOrigin.Begin);
-                    var stringReader = new StreamReader(mStream);
-                    var str = stringReader.ReadToEnd();
-                    stringReader.Close();
-
-                    var fs = new FileStream(index.ToString(), FileMode.Create);
-                    var width = (w.ActualWidth > 50) ? (w.ActualWidth) : 200;
-                    var height = (w.ActualHeight > 60) ? w.ActualHeight : 200;
-                    if (str.Contains("payload"))
-                    {
-                        contentIndicator[index] = "0 |" + w.Top + "|" + w.Left + "|" +
-                                                  height + "|" +
-                                                  width + "|" + w.Topmost +
-                                                  "|" + w.BackgroundColorIndex + "|" +
-                                                  w.ForegroundColorIndex + "|" +
-                                                  w.Alarm.TimeOfDay + "|" + w.Alarm.Date.ToShortDateString() +
-                                                  "|" + w.RepetitionNumber;
-                        tr.Save(fs, DataFormats.XamlPackage);
-                    }
-                    else
-                    {
-                        contentIndicator[index] = "1 |" + w.Top + "|" + w.Left + "|" +
-                                                  height + "|" +
-                                                  width + "|" + w.Topmost +
-                                                  "|" + w.BackgroundColorIndex + "|" +
-                                                  w.ForegroundColorIndex + "|" +
-                                                  w.Alarm.TimeOfDay + "|" + w.Alarm.Date.ToShortDateString() +
-                                                  "|" + w.RepetitionNumber;
-                        tr.Save(fs, DataFormats.Xaml);
-                    }
-                    index++;
-                    fs.Close();
-                    ((Window2) (WindowArray[i])).Close();
-                }
-            }
-
-            if (File.Exists("NotesFile"))
-            {
-                File.Delete("NotesFile");
-            }
-            var mainDataFile = new FileStream("NotesFile", FileMode.OpenOrCreate);
-            var writer = new StreamWriter(mainDataFile);
-            writer.WriteLine(index + "|" + AppWindow.Top + "|" + AppWindow.Left + "|" +
-                             AppWindow.Height + "|" + AppWindow.Width + "|" +
-                             AppWindow.Topmost + "|-1" + "|-1" + "|" + DateTime.Now.TimeOfDay +
-                             "|" +
-                             DateTime.Now.Date.ToShortDateString() + "|null");
-            for (var i = 0; i < index; i++)
-            {
-                writer.WriteLine(contentIndicator[i]);
-            }
-            writer.Close();
-            mainDataFile.Close();
-        }
-
-        private void AlarmTimer_Tick(object sender, EventArgs e)
-        {
-            var index = 0;
-            _windowContents = new string[ArrayPos];
-            for (var i = 0; i < ArrayPos; i++)
-            {
-                if (WindowArray[i] != null)
-                {
-                    var w = ((Window2) (WindowArray[i]));
-                    StoreContents(index++);
-                    CheckIfAlarmFires(w);
-                }
-            }
-
-            WriteNotesFile(index);
-        }
-
-        private static void CheckIfAlarmFires(Window2 w)
-        {
-            var current = DateTime.Now;
-            var m = LogicalTreeHelper.FindLogicalNode(w, "AlwaysOnTop") as MenuItem;
-            var m1 = LogicalTreeHelper.FindLogicalNode(w, "alarm") as MenuItem;
-            var m3 = LogicalTreeHelper.FindLogicalNode(w, "DismissAlarm") as MenuItem;
-            var alarm = w.Alarm;
-
-            var m2 =
-                LogicalTreeHelper.FindLogicalNode(w, "AlarmIndicator") as Image;
-            m2.Visibility = (alarm.CompareTo(DateTime.Now) >= 0) ? (Visibility.Visible) : (Visibility.Hidden);
-
-            if (w.RepetitionNumber.Contains("null") == false)
-            {
-                if ((alarm.CompareTo(current) < 0) &&
-                    (!(((current.TimeOfDay.Hours - alarm.TimeOfDay.Hours) < 8) &&
-                       ((current.TimeOfDay.Hours - alarm.TimeOfDay.Hours) >= 0))
-                     || !(current.Date.ToShortDateString().Contains(alarm.Date.ToShortDateString()))))
-                {
-                    var chArr = w.RepetitionNumber.ToCharArray(0, 1);
-                    var val = w.RepetitionNumber.Substring(1);
-                    var repetitionValue = int.Parse(val);
-                    switch (chArr[0])
-                    {
-                        case 'W':
-                            while (w.Alarm.Date.CompareTo(current.Date) < 0)
-                            {
-                                w.Alarm = w.Alarm.AddDays(7*repetitionValue);
-                            }
-
-                            break;
-
-                        case 'D':
-                            while (w.Alarm.Date.CompareTo(current.Date) < 0)
-                            {
-                                w.Alarm = w.Alarm.AddDays(repetitionValue);
-                            }
-                            break;
-
-                        default:
-                            break;
-                    }
-                    alarm = w.Alarm;
-                }
-            }
-
-            if (alarm.Date == current.Date)
-            {
-                var temp1 = alarm;
-                var temp2 = current;
-                temp1 = temp1.AddMinutes(30);
-                temp2 = temp2.AddMinutes(30);
-
-                if ((temp2.CompareTo(alarm) >= 0) && (temp1.CompareTo(current) >= 0) && (w.AlarmDismissed == false))
-                {
-                    w.Topmost = true;
-                    m.IsChecked = true;
-                    m1.IsEnabled = true;
-                    m3.IsEnabled = true;
-                    m2.Visibility = Visibility.Visible;
-
-                    w.BorderBrush = Brushes.Black;
-                    w.BorderThickness = new Thickness(5);
-                }
-                else if (((current.TimeOfDay.Hours - alarm.TimeOfDay.Hours) < 8) &&
-                         ((current.TimeOfDay.Hours - alarm.TimeOfDay.Hours) >= 0))
-                {
-                    w.Topmost = w.TopmostWindow;
-                    m.IsChecked = w.Topmost;
-                    m1.IsEnabled = (!w.RepetitionNumber.Contains("null"));
-                    m2.Visibility = m1.IsEnabled ? (Visibility.Visible) : (Visibility.Hidden);
-                    m3.IsEnabled = false;
-                    w.BorderBrush = Brushes.Tomato;
-                    w.BorderThickness = new Thickness(3);
-                }
-                else
-                {
-                    w.AlarmDismissed = false;
-                    m3.IsEnabled = false;
-                    m1.IsEnabled = (!w.RepetitionNumber.Contains("null"));
-                    m2.Visibility = m1.IsEnabled ? (Visibility.Visible) : (Visibility.Hidden);
-                }
-            }
-            else
-            {
-                w.Topmost = w.TopmostWindow;
-                m.IsChecked = w.Topmost;
-                m1.IsEnabled = (!w.RepetitionNumber.Contains("null"));
-                m2.Visibility = m1.IsEnabled ? (Visibility.Visible) : (Visibility.Hidden);
-                m3.IsEnabled = false;
-
-                w.BorderBrush = Brushes.Transparent;
-                w.BorderThickness = new Thickness(0);
-            }
-        }
-
-        private void CreateNote()
-        {
-            var w2 = new Window2
-            {
-                Title = "Stick It",
-                Tag = ArrayPos
-            };
-            WindowArray[ArrayPos] = w2;
-            ArrayPos++;
-        }
-
-        private void StoreContents(int index)
-        {
-            var w = ((Window2) (WindowArray[index]));
-            var rtb = ((RichTextBox) (((StackPanel) (w.Content)).Children[1]));
-            var tr = new TextRange(rtb.Document.ContentStart, rtb.Document.ContentEnd);
-
-            var mStream = new MemoryStream();
-            XamlWriter.Save(rtb.Document, mStream);
-            mStream.Seek(0, SeekOrigin.Begin);
-            var stringReader = new StreamReader(mStream);
-            var str = stringReader.ReadToEnd();
-            stringReader.Close();
-
-            var fs = new FileStream(index.ToString(), FileMode.Create);
-            var width = (w.ActualWidth > 50) ? (w.ActualWidth) : 200;
-            var height = (w.ActualHeight > 60) ? w.ActualHeight : 200;
-            if (str.Contains("payload"))
-            {
-                _windowContents[index] = "0 |" + w.Top + "|" + w.Left + "|" + height +
-                                         "|" +
-                                         width + "|" + w.Topmost +
-                                         "|" + w.BackgroundColorIndex + "|" +
-                                         w.ForegroundColorIndex + "|" +
-                                         w.Alarm.TimeOfDay + "|" + w.Alarm.Date.ToShortDateString() +
-                                         "|" + w.RepetitionNumber;
-                tr.Save(fs, DataFormats.XamlPackage);
-            }
-            else
-            {
-                _windowContents[index] = "1 |" + w.Top + "|" + w.Left + "|" + height +
-                                         "|" +
-                                         width + "|" + w.Topmost +
-                                         "|" + w.BackgroundColorIndex + "|" +
-                                         w.ForegroundColorIndex + "|" +
-                                         w.Alarm.TimeOfDay + "|" + w.Alarm.Date.ToShortDateString() +
-                                         "|" + w.RepetitionNumber;
-                tr.Save(fs, DataFormats.Xaml);
-            }
-            fs.Close();
-        }
-
-        private void WriteNotesFile(int index)
-        {
-            if (File.Exists("NotesFile"))
-            {
-                File.Delete("NotesFile");
-            }
-            var mainDataFile = new FileStream("NotesFile", FileMode.Create);
-            var writer = new StreamWriter(mainDataFile);
-            writer.WriteLine(index + "|" + AppWindow.Top + "|" + AppWindow.Left + "|" +
-                             AppWindow.Height + "|" + AppWindow.Width + "|" +
-                             AppWindow.Topmost + "|-1" + "|-1" + "|" + DateTime.Now.TimeOfDay +
-                             "|" +
-                             DateTime.Now.Date.ToShortDateString() + "|null");
-            for (var i = 0; i < index; i++)
-            {
-                writer.WriteLine(_windowContents[i]);
-            }
-            writer.Close();
-        }
-
+public sealed class NoteCard
+{
+    public Window2 Note { get; }
+    public Brush Background=>Note.PaperBrush;
+    public string Time=>Note.Data.Modified.ToString("H:mm");
+    public string Title { get; }
+    public string Body { get; }
+    public NoteCard(Window2 note)
+    {
+        Note=note;
+        var text=Markdig.Markdown.ToPlainText(note.Data.Markdown).Trim();
+        var newline=text.IndexOf('\n');
+        Title=text.Length==0 ? "空白便签" : newline<0 ? text : text.Substring(0,newline).TrimEnd();
+        Body=newline<0 ? "" : text.Substring(newline+1).Trim();
     }
 }
