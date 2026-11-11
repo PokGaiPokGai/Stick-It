@@ -8,7 +8,7 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 - **Shift + Alt + W** creates a new, pinned note centered on the mouse pointer. The position is constrained to that monitor's work area. The shortcut does not repeat while held; registration failures appear in the library.
 - Individual notes never appear on the taskbar. The library has a taskbar entry only while it is open; closing the library hides it, leaving the tray and notes running.
 - Click the tray icon to open the library. Its menu includes new note and save/exit.
-- Notes are solid-color rounded rectangles. When not editing, only the paper and content remain: the toolbar and its reserved height are removed. Clicking the body reveals editing controls; moving focus away hides them. The paper margin can be dragged to move a note. Their menu changes the paper color or explicitly deletes the note. The pin button controls always-on-top.
+- Open notes always stay on top. Click the body to edit and reveal the close button. Drag the empty part of the top bar or the paper margin to move a note. Right-click the paper to change its color or delete it.
 - Closing a note hides it; click its library card to reopen it. Deletion requires confirmation.
 - Click the note body to edit Markdown. Moving focus away renders it automatically. There is no edit/preview mode button.
 - Markdown supports headings, emphasis, strikethrough, lists, task-list marks, quotes, inline/fenced code, links and tables. Task marks are edited as Markdown text. Remote images and embedded HTML are not rendered.

@@ -77,7 +77,7 @@ public partial class MainWindow : Window
     }
     private void CreateNote()
     {
-        var note=AddNote(new NoteData { Pinned=true });
+        var note=AddNote(new NoteData());
         DesktopIntegration.PlaceAtCursor(note);
         note.Open(edit:true);
         OnNoteChanged();

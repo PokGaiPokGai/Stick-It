@@ -21,7 +21,6 @@ public sealed class Window2 : Window
     private readonly Grid header;
     private readonly Grid body;
     private readonly TextBlock placeholder;
-    private readonly Button pin;
     private bool disposing;
     private bool editing;
 
@@ -31,7 +30,7 @@ public sealed class Window2 : Window
         Title="Stick It";
         Icon=BitmapFrame.Create(new Uri("pack://application:,,,/Stick It;component/Assets/StickIt.ico"));
         Width=data.Width; Height=data.Height; Left=data.Left; Top=data.Top;
-        MinWidth=200; MinHeight=160; Topmost=data.Pinned; ShowInTaskbar=false;
+        MinWidth=200; MinHeight=160; Topmost=true; ShowInTaskbar=false;
         WindowStyle=WindowStyle.None; ResizeMode=ResizeMode.CanResize;
         Background=Brushes.Transparent; AllowsTransparency=true;
         WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight=0, ResizeBorderThickness=new Thickness(5), GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(10) });
@@ -45,13 +44,14 @@ public sealed class Window2 : Window
         header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0), Height=34, Visibility=Visibility.Collapsed };
         header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState==MouseButtonState.Pressed) DragMove(); };
         layout.Children.Add(header);
-        var actions=new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Right };
-        header.Children.Add(actions);
-        pin=IconButton("\uE718", "置顶"); pin.Opacity=data.Pinned ? .8 : .35;
-        pin.Click += (_, _) => { Data.Pinned=Topmost=!Topmost; pin.Opacity=Topmost ? .8 : .35; Changed?.Invoke(); };
-        actions.Children.Add(pin);
-        var menu=IconButton("\uE712", "颜色与删除");
+        var close = IconButton("\uE8BB", "收起便签");
+        close.HorizontalAlignment = HorizontalAlignment.Right;
+        close.VerticalAlignment = VerticalAlignment.Top;
+        close.Click += (_, _) => Close();
+        header.Children.Add(close);
+
         var context=new ContextMenu();
+        paper.ContextMenu = context;
         var palette=new StackPanel { Orientation=Orientation.Horizontal, Margin=new Thickness(4) };
         foreach (var color in new[] { "#FFF7C2", "#E2F1FF", "#F5E0F0", "#E4F2D5", "#EEE8FB", "#F0F0F0" })
         {
@@ -62,8 +62,6 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        menu.Click += (_, _) => { context.PlacementTarget=menu; context.IsOpen=true; }; actions.Children.Add(menu);
-        var close=IconButton("\uE8BB", "收起便签"); close.Click += (_, _) => Close(); actions.Children.Add(close);
         body=new Grid { Margin=new Thickness(16,16,16,14) }; Grid.SetRow(body,1); layout.Children.Add(body);
         editor=new TextBox { Text=data.Markdown, AcceptsReturn=true, AcceptsTab=true, TextWrapping=TextWrapping.Wrap,
             VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=Brushes.Transparent, BorderThickness=new Thickness(0),
@@ -71,6 +69,7 @@ public sealed class Window2 : Window
             Visibility=Visibility.Collapsed };
         rendered=new FlowDocumentScrollViewer { Document=MarkdownView.Render(data.Markdown), IsToolBarVisible=false,
             VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Padding=new Thickness(0) };
+        rendered.ContextMenu = context;
         body.Children.Add(rendered); body.Children.Add(editor);
         placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
         body.Children.Add(placeholder);

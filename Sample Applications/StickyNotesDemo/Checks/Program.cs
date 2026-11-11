@@ -89,15 +89,22 @@ internal static class Checks
     static object Invoke(object obj,string method,params object[] values) => obj.GetType().GetMethod(method,BindingFlags.Instance|BindingFlags.NonPublic).Invoke(obj,values);
     static void TestWindows(string temp,string output)
     {
-        var main=new MainWindow(new NoteStore(Path.Combine(temp,"ui")));
+        var noteDirectory = Path.Combine(temp, "ui");
+        Directory.CreateDirectory(noteDirectory);
+        File.WriteAllText(Path.Combine(noteDirectory, "notes.json"), """[{"Pinned":false}]""");
+        var store = new NoteStore(noteDirectory);
+        var main = new MainWindow(store);
         Application.Current.MainWindow=main;
-        var data=new NoteData { Markdown="## Blender HairMesh 插件问题\n- 数值恢复默认值\n- 保存当前面板状态\n- 检查 UI 逻辑\n- 调整 crown 卡片",Color="#E2F1FF",Modified=DateTime.Today.AddHours(15).AddMinutes(29) };
+        var data = store.Load().Single();
+        data.Markdown = "## Blender HairMesh 插件问题\n- 数值恢复默认值\n- 保存当前面板状态\n- 检查 UI 逻辑\n- 调整 crown 卡片";
+        data.Color = "#E2F1FF";
+        data.Modified = DateTime.Today.AddHours(15).AddMinutes(29);
         var note=(Window2)Invoke(main,"AddNote",data);
         Invoke(main,"AddNote",new NoteData { Markdown="fork 一下 HairMesh 仓库，自行优化",Modified=DateTime.Today.AddHours(3).AddMinutes(34) });
         Invoke(main,"AddNote",new NoteData { Markdown="随手记录一个想法",Modified=DateTime.Today.AddHours(2).AddMinutes(43) });
         Invoke(main,"RefreshList");
         Assert(!note.ShowInTaskbar && main.ShowInTaskbar,"only library window participates in taskbar");
-        Assert(note.Topmost && note.Background==Brushes.Transparent && ((Border)note.Content).Background is SolidColorBrush,"pinned note uses solid rounded paper");
+        Assert(note.Topmost && note.Background==Brushes.Transparent && ((Border)note.Content).Background is SolidColorBrush,"previously unpinned note stays on top and uses solid rounded paper");
         Render((FrameworkElement)main.Content,478,720,Path.Combine(output,"library-preview.png"));
         Render((FrameworkElement)note.Content,320,300,Path.Combine(output,"note-preview.png"));
         var search=(TextBox)main.FindName("SearchBox"); search.Text="fork";

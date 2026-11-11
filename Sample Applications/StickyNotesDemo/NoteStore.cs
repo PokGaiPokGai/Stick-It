@@ -19,7 +19,6 @@ public sealed class NoteData
     public double Width { get; set; } = 320;
     public double Height { get; set; } = 300;
     public bool IsOpen { get; set; } = true;
-    public bool Pinned { get; set; } = true;
 }
 
 public sealed class NoteStore
@@ -76,7 +75,7 @@ public sealed class NoteStore
                 Markdown = text.Text.TrimEnd('\r', '\n'), Modified = File.GetLastWriteTime(path),
                 Left = double.Parse(fields[2]), Top = double.Parse(fields[1]),
                 Width = Math.Max(200, double.Parse(fields[4])), Height = Math.Max(160, double.Parse(fields[3])),
-                Color = color == -1 ? "#FFF7C2" : colors[color], Pinned=bool.Parse(fields[5]), IsOpen=true
+                Color = color == -1 ? "#FFF7C2" : colors[color], IsOpen=true
             });
         }
         return result;
