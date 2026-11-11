@@ -1,25 +1,31 @@
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
 using System.Windows.Shell;
+using static StickyNotesDemo.MarkdownView;
 
 namespace StickyNotesDemo;
 
 public sealed class Window2 : Window
 {
+    private const double HeaderHeight = 28;
+    private const double FooterHeight = 34;
+
     public NoteData Data { get; }
     public event Action Changed;
     public event Action DeleteRequested;
-    private readonly TextBox editor;
-    private readonly FlowDocumentScrollViewer rendered;
+    private readonly NoteEditor editor;
     private readonly Border paper;
     private readonly Grid header;
-    private readonly Grid body;
+    private readonly UniformGrid footer;
     private readonly TextBlock placeholder;
     private bool disposing;
     private bool editing;
@@ -36,12 +42,15 @@ public sealed class Window2 : Window
         WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight=0, ResizeBorderThickness=new Thickness(5), GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(10) });
         paper=new Border { CornerRadius=new CornerRadius(10), Background=PaperBrush, Padding=new Thickness(1) };
         Content=paper;
-        var layout=new Grid(); layout.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto }); layout.RowDefinitions.Add(new RowDefinition());
+        var layout = new Grid();
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderHeight) });
+        layout.RowDefinitions.Add(new RowDefinition());
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(FooterHeight) });
         paper.Child=layout;
         paper.MouseLeftButtonDown += (_, e) => {
             if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==layout)) DragMove();
         };
-        header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0), Height=34, Visibility=Visibility.Collapsed };
+        header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0), Visibility=Visibility.Collapsed };
         header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState==MouseButtonState.Pressed) DragMove(); };
         layout.Children.Add(header);
         var close = IconButton("\uE8BB", "收起便签");
@@ -62,30 +71,29 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        body=new Grid { Margin=new Thickness(16,16,16,14) }; Grid.SetRow(body,1); layout.Children.Add(body);
-        editor=new TextBox { Text=data.Markdown, AcceptsReturn=true, AcceptsTab=true, TextWrapping=TextWrapping.Wrap,
-            VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=Brushes.Transparent, BorderThickness=new Thickness(0),
-            Padding=new Thickness(0), FontFamily=new FontFamily("Segoe UI, Microsoft YaHei UI"), FontSize=14, Foreground=new SolidColorBrush(Color.FromRgb(38,38,38)),
-            Visibility=Visibility.Collapsed };
-        rendered=new FlowDocumentScrollViewer { Document=MarkdownView.Render(data.Markdown), IsToolBarVisible=false,
-            VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Padding=new Thickness(0) };
-        rendered.ContextMenu = context;
-        body.Children.Add(rendered); body.Children.Add(editor);
+        var body = new Grid { Margin = new Thickness(16, 2, 16, 14) };
+        Grid.SetRow(body, 1);
+        layout.Children.Add(body);
+        editor = new NoteEditor(data.Markdown) { ContextMenu = context };
+        body.Children.Add(editor);
+        footer = CreateFormattingToolbar();
+        Grid.SetRow(footer, 2);
+        layout.Children.Add(footer);
         placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
         body.Children.Add(placeholder);
         UpdatePlaceholder();
-        editor.TextChanged += (_, _) => { Data.Markdown=editor.Text; Data.Modified=DateTime.Now; UpdatePlaceholder(); Changed?.Invoke(); };
-        rendered.PreviewMouseLeftButtonDown += (_, e) => {
-            // Links remain clickable; clicking ordinary paper starts editing.
+        editor.DocumentEdited += SaveDocumentChanges;
+        editor.PreviewMouseLeftButtonDown += (_, e) => {
+            if (editing) return;
             for (var node=e.OriginalSource as DependencyObject; node!=null;)
             {
-                if (node is Hyperlink) return;
+                if (node is Hyperlink or CheckBox) return;
                 node=node is FrameworkContentElement content ? content.Parent :
                     node is Visual ? VisualTreeHelper.GetParent(node) : null;
             }
-            BeginEditing(); e.Handled=true;
+            BeginEditing();
         };
-        editor.LostKeyboardFocus += (_, _) => { if (!context.IsOpen) FinishEditing(); };
+        editor.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(OpenLink));
         Deactivated += (_, _) => { if (!context.IsOpen) FinishEditing(); };
         context.Closed += (_, _) => {
             if (editing && IsActive) editor.Focus();
@@ -95,9 +103,65 @@ public sealed class Window2 : Window
         SizeChanged += (_, _) => { Data.Width=Width; Data.Height=Height; Changed?.Invoke(); };
     }
     public Brush PaperBrush => (Brush)new BrushConverter().ConvertFromString(Data.Color);
+    public string PlainText => editor.PlainText;
+
+    private void SaveDocumentChanges()
+    {
+        var markdown = editor.Markdown;
+        if (Data.Markdown == markdown) return;
+        Data.Markdown = markdown;
+        Data.Modified = DateTime.Now;
+        UpdatePlaceholder();
+        Changed?.Invoke();
+    }
+
+    private void OpenLink(object sender, RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        if ((!editing || Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) &&
+            e.Uri is { IsAbsoluteUri: true } uri && uri.Scheme is "https" or "http" or "mailto")
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+    }
+
+    private UniformGrid CreateFormattingToolbar()
+    {
+        var toolbar = new UniformGrid { Rows = 1, Margin = new Thickness(8, 0, 8, 4), Visibility = Visibility.Collapsed };
+        void Add(string text, string hint, Action apply, InlineStyle style = InlineStyle.None)
+        {
+            var label = new TextBlock { Text = text, FontSize = 13 };
+            if (style == InlineStyle.Bold) label.FontWeight = FontWeights.Bold;
+            if (style == InlineStyle.Italic) label.FontStyle = FontStyles.Italic;
+            if (style == InlineStyle.Underline) label.TextDecorations = TextDecorations.Underline;
+            if (style == InlineStyle.Strike) label.TextDecorations = TextDecorations.Strikethrough;
+            var button = new Button
+            {
+                Content = label, ToolTip = hint, Focusable = false, Background = Brushes.Transparent,
+                Foreground = new SolidColorBrush(Color.FromRgb(65, 65, 65)), Template = FlatButtonTemplate()
+            };
+            System.Windows.Automation.AutomationProperties.SetName(button, hint);
+            button.Click += (_, _) =>
+            {
+                editor.Focus();
+                apply();
+            };
+            toolbar.Children.Add(button);
+        }
+
+        Add("H", "标题 / 正文", editor.ToggleHeading);
+        Add("B", "粗体（Ctrl+B）", () => editor.ToggleMark(InlineStyle.Bold), InlineStyle.Bold);
+        Add("I", "斜体（Ctrl+I）", () => editor.ToggleMark(InlineStyle.Italic), InlineStyle.Italic);
+        Add("U", "下划线", () => editor.ToggleMark(InlineStyle.Underline), InlineStyle.Underline);
+        Add("S", "删除线", () => editor.ToggleMark(InlineStyle.Strike), InlineStyle.Strike);
+        Add("•≡", "项目符号列表", () => editor.ToggleList(false));
+        Add("1.", "编号列表", () => editor.ToggleList(true));
+        Add("☑", "待办事项", editor.ToggleTask);
+        Add("</>", "行内代码", () => editor.ToggleMark(InlineStyle.Code));
+        return toolbar;
+    }
+
     private static Button IconButton(string glyph, string hint) => new Button {
         Content=glyph, ToolTip=hint, FontFamily=new FontFamily("Segoe MDL2 Assets"), FontSize=12,
-        Width=28, Height=28, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
+        Width=28, Height=HeaderHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
         Template=FlatButtonTemplate()
     };
     public static ControlTemplate FlatButtonTemplate()
@@ -116,27 +180,27 @@ public sealed class Window2 : Window
     public void Open(bool edit=false)
     {
         Data.IsOpen=true; Show(); WindowState=WindowState.Normal; Activate();
-        if (edit) BeginEditing();
+        if (edit) { BeginEditing(); editor.Focus(); }
         Changed?.Invoke();
     }
-    private void UpdatePlaceholder() => placeholder.Visibility=!editing && editor.Text.Length==0 ? Visibility.Visible : Visibility.Collapsed;
+    private void UpdatePlaceholder() => placeholder.Visibility=!editing && Data.Markdown.Length==0 ? Visibility.Visible : Visibility.Collapsed;
     private void BeginEditing()
     {
         editing=true;
         header.Visibility=Visibility.Visible;
-        body.Margin=new Thickness(16,2,16,14);
-        rendered.Visibility=Visibility.Collapsed; editor.Visibility=Visibility.Visible;
+        footer.Visibility = Visibility.Visible;
+        editor.IsReadOnly = false;
+        editor.ClearValue(ContextMenuProperty);
         UpdatePlaceholder();
-        editor.Focus(); editor.CaretIndex=editor.Text.Length;
     }
     private void FinishEditing()
     {
         if (!editing) return;
         editing=false;
         header.Visibility=Visibility.Collapsed;
-        body.Margin=new Thickness(16,16,16,14);
-        rendered.Document=MarkdownView.Render(editor.Text);
-        editor.Visibility=Visibility.Collapsed; rendered.Visibility=Visibility.Visible;
+        footer.Visibility = Visibility.Collapsed;
+        editor.IsReadOnly = true;
+        editor.ContextMenu = paper.ContextMenu;
         UpdatePlaceholder();
     }
     protected override void OnClosing(CancelEventArgs e)

@@ -8,10 +8,11 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 - **Shift + Alt + W** creates a new, pinned note centered on the mouse pointer. The position is constrained to that monitor's work area. The shortcut does not repeat while held; registration failures appear in the library.
 - Individual notes never appear on the taskbar. The library has a taskbar entry only while it is open; closing the library hides it, leaving the tray and notes running.
 - Click the tray icon to open the library. Its menu includes new note and save/exit.
-- Open notes always stay on top. Click the body to edit and reveal the close button. Drag the empty part of the top bar or the paper margin to move a note. Right-click the paper to change its color or delete it.
+- New notes start as 320 × 320 squares and open on top. Click the body to edit and reveal the close button. The body keeps the same position and size as the button appears or disappears. Drag the top strip or the paper margin to move a note. Right-click the paper to change its color or delete it.
 - Closing a note hides it; click its library card to reopen it. Deletion requires confirmation.
-- Click the note body to edit Markdown. Moving focus away renders it automatically. There is no edit/preview mode button.
-- Markdown supports headings, emphasis, strikethrough, lists, task-list marks, quotes, inline/fenced code, links and tables. Task marks are edited as Markdown text. Remote images and embedded HTML are not rendered.
+- Click the note body to edit the formatted content in place. The bottom toolbar offers heading, bold, italic, underline, strikethrough, bulleted list, numbered list, task, and inline code. Click a task checkbox to change its state.
+- Use Markdown shortcuts while typing. For example, type `##` followed by a space for a heading or `**text**` followed by a space for bold. Pasting plain-text Markdown inserts formatted content at the selection.
+- Notes save to Markdown and can reopen with headings, emphasis, lists, task states, quotes, inline and fenced code, links, and tables. Images are represented by their labels.
 - Edits are saved after a 600 ms pause. Notes and open/closed state live in `%LOCALAPPDATA%\Stick It\notes.json`; the previous save is retained as `notes.json.bak`.
 - Original sample `NotesFile` data is imported on first launch when no JSON store exists. Text, position and color are imported; original rich-text files are retained unchanged. The old sample's email/alarm demonstration UI is not part of this Markdown version.
 

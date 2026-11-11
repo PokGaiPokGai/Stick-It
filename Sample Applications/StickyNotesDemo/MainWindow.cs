@@ -92,7 +92,7 @@ public partial class MainWindow : Window
     {
         if(NoteList==null) return;
         var query=SearchBox.Text.Trim();
-        var rows=notes.Where(n=>n.Data.Markdown.Contains(query,StringComparison.CurrentCultureIgnoreCase))
+        var rows=notes.Where(n=>n.PlainText.Contains(query,StringComparison.CurrentCultureIgnoreCase))
             .OrderByDescending(n=>n.Data.Modified).Select(n=>new NoteCard(n)).ToArray();
         NoteList.ItemsSource=rows;
         SearchHint.Visibility=query.Length==0 ? Visibility.Visible : Visibility.Collapsed;
@@ -148,7 +148,7 @@ public sealed class NoteCard
     public NoteCard(Window2 note)
     {
         Note=note;
-        var text=Markdig.Markdown.ToPlainText(note.Data.Markdown).Trim();
+        var text=note.PlainText.Trim();
         var newline=text.IndexOf('\n');
         Title=text.Length==0 ? "空白便签" : newline<0 ? text : text.Substring(0,newline).TrimEnd();
         Body=newline<0 ? "" : text.Substring(newline+1).Trim();

@@ -1,6 +1,8 @@
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using Markdig;
@@ -12,36 +14,123 @@ namespace StickyNotesDemo;
 
 public static class MarkdownView
 {
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UsePipeTables().UseTaskLists().UseEmphasisExtras().Build();
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UsePipeTables().UseTaskLists()
+        .UseEmphasisExtras().UsePreciseSourceLocation().Build();
+    private static readonly double[] HeadingSizes = [26, 22, 19, 17, 15, 14];
+    internal static readonly FontFamily CodeFont = new("Consolas");
+    internal static readonly Brush InlineCodeBackground = new SolidColorBrush(Color.FromArgb(18, 0, 0, 0));
+    internal sealed record CodeBlockInfo(string Language);
+    internal sealed record LinkInfo(string Url, bool IsImage);
+    internal enum BlockStyle { Quote, Divider }
+
+    [Flags]
+    internal enum InlineStyle { None = 0, Bold = 1, Italic = 2, Underline = 4, Strike = 8, Code = 16 }
+
     public static FlowDocument Render(string markdown)
+        => Render(Markdig.Markdown.Parse(markdown, Pipeline));
+
+    internal static FlowDocument ReadFormattedPaste(string text)
+    {
+        var parsed = Markdig.Markdown.Parse(text, Pipeline);
+        return parsed.Any(block => block is not ParagraphBlock paragraph ||
+            paragraph.Inline?.Any(inline => inline is EmphasisInline or CodeInline or LinkInline or AutolinkInline) == true)
+            ? Render(parsed)
+            : null;
+    }
+
+    internal static (int Start, Paragraph Content)? ReadInlineShortcut(string text, bool codeOnly)
+    {
+        var parsed = Markdig.Markdown.Parse(text, Pipeline);
+        if (parsed.Count != 1 || parsed[0] is not ParagraphBlock paragraph ||
+            paragraph.Inline?.LastChild is not (EmphasisInline or CodeInline or LinkInline or AutolinkInline) ||
+            paragraph.Inline.LastChild.Span.End != text.Length - 1)
+            return null;
+
+        var inline = paragraph.Inline.LastChild;
+        if (codeOnly && inline is not CodeInline) return null;
+        inline.Remove();
+        var fragment = new ContainerInline();
+        fragment.AppendChild(inline);
+        return (inline.Span.Start, Paragraph(fragment));
+    }
+
+    private static FlowDocument Render(MarkdownDocument markdown)
     {
         var document = new FlowDocument { FontFamily=new FontFamily("Segoe UI, Microsoft YaHei UI"), FontSize=14,
             Foreground=new SolidColorBrush(Color.FromRgb(38,38,38)), PagePadding=new Thickness(0),
             ColumnWidth=double.PositiveInfinity };
-        foreach (var block in Markdig.Markdown.Parse(markdown, Pipeline)) document.Blocks.Add(RenderBlock(block));
+        foreach (var block in markdown) document.Blocks.Add(RenderBlock(block));
+        if (document.Blocks.Count == 0) document.Blocks.Add(Paragraph(null));
         return document;
     }
+
+    internal static int HeadingLevel(Paragraph paragraph) => paragraph.Tag is int level ? level : 0;
+
+    internal static void SetHeading(Paragraph paragraph, int level)
+    {
+        paragraph.Tag = level == 0 ? null : level;
+        if (level == 0)
+        {
+            paragraph.ClearValue(TextElement.FontSizeProperty);
+            paragraph.ClearValue(TextElement.FontWeightProperty);
+        }
+        else
+        {
+            paragraph.FontSize = HeadingSizes[level - 1];
+            paragraph.FontWeight = FontWeights.SemiBold;
+        }
+    }
+
+    internal static void SetCodeBlock(Paragraph paragraph, string language)
+    {
+        paragraph.Tag = new CodeBlockInfo(language ?? "");
+        paragraph.FontFamily = CodeFont;
+        paragraph.FontSize = 12;
+        paragraph.Background = new SolidColorBrush(Color.FromArgb(14, 0, 0, 0));
+        paragraph.Padding = new Thickness(8);
+        paragraph.Margin = new Thickness(0, 4, 0, 10);
+    }
+
+    internal static Section Quote() => new()
+    {
+        Tag = BlockStyle.Quote, BorderBrush = new SolidColorBrush(Color.FromArgb(70, 0, 0, 0)),
+        BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(10, 0, 0, 0),
+        Margin = new Thickness(0, 4, 0, 10)
+    };
+
+    internal static InlineUIContainer TaskMarker(bool isChecked) => new(new CheckBox
+    {
+        IsChecked = isChecked, Focusable = false, Margin = new Thickness(0, 0, 5, 0),
+        ToolTip = "标记待办状态", VerticalAlignment = VerticalAlignment.Center
+    }) { BaselineAlignment = BaselineAlignment.Center };
+
     private static System.Windows.Documents.Block RenderBlock(Markdig.Syntax.Block block)
     {
         switch (block)
         {
             case HeadingBlock heading:
                 var title = Paragraph(heading.Inline);
-                title.FontSize = new double[] { 26,22,19,17,15,14 }[heading.Level-1];
-                title.FontWeight = FontWeights.SemiBold;
+                SetHeading(title, heading.Level);
                 return title;
             case ParagraphBlock paragraph: return Paragraph(paragraph.Inline);
             case CodeBlock code:
-                return new Paragraph(new Run(code.Lines.ToString())) { FontFamily=new FontFamily("Consolas"), FontSize=12,
-                    Background=new SolidColorBrush(Color.FromArgb(14,0,0,0)), Padding=new Thickness(8), Margin=new Thickness(0,4,0,10) };
+                var codeParagraph = new Paragraph(new Run(code.Lines.ToString()));
+                SetCodeBlock(codeParagraph, code is FencedCodeBlock fenced ? fenced.Info : "");
+                return codeParagraph;
             case QuoteBlock quote:
-                var section = new Section { BorderBrush=new SolidColorBrush(Color.FromArgb(70,0,0,0)),
-                    BorderThickness=new Thickness(3,0,0,0), Padding=new Thickness(10,0,0,0), Margin=new Thickness(0,4,0,10) };
+                var section = Quote();
                 foreach (var child in quote) section.Blocks.Add(RenderBlock(child));
                 return section;
             case ListBlock list:
-                var items = new System.Windows.Documents.List { MarkerStyle=list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
-                    Padding=new Thickness(22,0,0,0), Margin=new Thickness(0,0,0,8) };
+                var taskList = list.All(item => item is ListItemBlock row && row.FirstOrDefault() is ParagraphBlock first &&
+                    first.Inline?.FirstChild is TaskList);
+                var items = new System.Windows.Documents.List
+                {
+                    MarkerStyle = taskList ? TextMarkerStyle.None : list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
+                    Padding = taskList ? new Thickness(0) : new Thickness(22, 0, 0, 0),
+                    Margin = new Thickness(0, 0, 0, 8)
+                };
+                if (list.IsOrdered && int.TryParse(list.OrderedStart, out var start) && start > 0) items.StartIndex = start;
                 foreach (ListItemBlock item in list)
                 {
                     var row = new ListItem();
@@ -50,7 +139,7 @@ public static class MarkdownView
                 }
                 return items;
             case ThematicBreakBlock:
-                return new Paragraph { BorderBrush=new SolidColorBrush(Color.FromArgb(45,0,0,0)), BorderThickness=new Thickness(0,1,0,0), Margin=new Thickness(0,8,0,8) };
+                return new Paragraph { Tag = BlockStyle.Divider, BorderBrush=new SolidColorBrush(Color.FromArgb(45,0,0,0)), BorderThickness=new Thickness(0,1,0,0), Margin=new Thickness(0,8,0,8) };
             case Markdig.Extensions.Tables.Table table:
                 var output = new System.Windows.Documents.Table { CellSpacing=0, Margin=new Thickness(0,4,0,10) };
                 var group = new TableRowGroup(); output.RowGroups.Add(group);
@@ -65,6 +154,9 @@ public static class MarkdownView
                     }
                 }
                 return output;
+            case HtmlBlock html:
+                var literal = html.Lines.ToString();
+                return literal.Trim() == "<br>" ? Paragraph(null) : new Paragraph(new Run(literal));
             default:
                 return new Paragraph();
         }
@@ -75,31 +167,98 @@ public static class MarkdownView
         if (inline != null) AddInlines(paragraph.Inlines, inline);
         return paragraph;
     }
-    private static void AddInlines(InlineCollection target, ContainerInline container)
+    internal static Run StyledRun(string text, InlineStyle style)
     {
+        var run = new Run(text);
+        if (style.HasFlag(InlineStyle.Bold)) run.FontWeight = FontWeights.Bold;
+        if (style.HasFlag(InlineStyle.Italic)) run.FontStyle = FontStyles.Italic;
+        var decorations = new TextDecorationCollection();
+        if (style.HasFlag(InlineStyle.Underline)) decorations.Add(TextDecorations.Underline);
+        if (style.HasFlag(InlineStyle.Strike)) decorations.Add(TextDecorations.Strikethrough);
+        if (decorations.Count > 0) run.TextDecorations = decorations;
+        if (style.HasFlag(InlineStyle.Code))
+        {
+            run.FontFamily = CodeFont;
+            run.Background = InlineCodeBackground;
+        }
+        return run;
+    }
+
+    private static void AddInlines(InlineCollection target, ContainerInline container, InlineStyle style = InlineStyle.None)
+    {
+        var inlineTags = new Stack<(string Close, InlineStyle Before)>();
+        var afterTask = false;
         foreach (var inline in container)
         {
             switch (inline)
             {
-                case LiteralInline text: target.Add(new Run(text.Content.ToString())); break;
-                case CodeInline code: target.Add(new Run(code.Content) { FontFamily=new FontFamily("Consolas"), Background=new SolidColorBrush(Color.FromArgb(18,0,0,0)) }); break;
+                case LiteralInline text:
+                    var value = text.Content.ToString();
+                    if (afterTask && value.Length > 0 && value[0] is ' ' or '\t') value = value[1..];
+                    afterTask = false;
+                    if (value.Length > 0) target.Add(StyledRun(value, style));
+                    break;
+                case CodeInline code: target.Add(StyledRun(code.Content, style | InlineStyle.Code)); break;
                 case LineBreakInline: target.Add(new LineBreak()); break;
                 case EmphasisInline emphasis:
-                    Span span = emphasis.DelimiterChar == '~' ? new Span { TextDecorations=TextDecorations.Strikethrough }
-                        : emphasis.DelimiterCount >= 2 ? new Bold() : new Italic();
-                    AddInlines(span.Inlines, emphasis); target.Add(span); break;
-                case TaskList task: target.Add(new Run(task.Checked ? "☑ " : "☐ ")); break;
-                case LinkInline link:
-                    var label = new Span(); AddInlines(label.Inlines, link);
-                    if (!link.IsImage && Uri.TryCreate(link.Url, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http" || uri.Scheme == "mailto"))
+                    var mark = emphasis.DelimiterChar switch
                     {
-                        var hyperlink = new Hyperlink(label) { NavigateUri=uri };
-                        hyperlink.RequestNavigate += (_, e) => { Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute=true }); e.Handled=true; };
-                        target.Add(hyperlink);
-                    }
-                    else target.Add(label);
+                        '~' when emphasis.DelimiterCount >= 2 => InlineStyle.Strike,
+                        '+' or '~' => InlineStyle.Underline,
+                        '*' or '_' when emphasis.DelimiterCount >= 2 => InlineStyle.Bold,
+                        '*' or '_' => InlineStyle.Italic,
+                        _ => InlineStyle.None
+                    };
+                    AddInlines(target, emphasis, style | mark);
                     break;
-                case ContainerInline child: AddInlines(target, child); break;
+                case TaskList task:
+                    target.Add(TaskMarker(task.Checked));
+                    afterTask = true;
+                    break;
+                case LinkInline link:
+                    Span label;
+                    if (!link.IsImage && Uri.TryCreate(link.Url, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http" || uri.Scheme == "mailto"))
+                        label = new Hyperlink { NavigateUri = uri };
+                    else label = new Span();
+                    label.Tag = new LinkInfo(link.Url ?? "", link.IsImage);
+                    AddInlines(label.Inlines, link, style);
+                    target.Add(label);
+                    break;
+                case HtmlEntityInline entity:
+                    target.Add(StyledRun(entity.Transcoded.ToString(), style));
+                    break;
+                case HtmlInline html:
+                    if (inlineTags.TryPeek(out var open) && html.Tag == open.Close)
+                    {
+                        style = inlineTags.Pop().Before;
+                        break;
+                    }
+                    var tag = html.Tag switch
+                    {
+                        "<strong>" => ("</strong>", InlineStyle.Bold),
+                        "<em>" => ("</em>", InlineStyle.Italic),
+                        "<u>" => ("</u>", InlineStyle.Underline),
+                        "<s>" => ("</s>", InlineStyle.Strike),
+                        _ => ("", InlineStyle.None)
+                    };
+                    if (tag.Item2 != InlineStyle.None)
+                    {
+                        inlineTags.Push((tag.Item1, style));
+                        style |= tag.Item2;
+                    }
+                    else if (html.Tag == "<br>") target.Add(new LineBreak());
+                    else target.Add(StyledRun(html.Tag, style));
+                    break;
+                case AutolinkInline autolink:
+                    var address = autolink.IsEmail ? "mailto:" + autolink.Url : autolink.Url;
+                    if (Uri.TryCreate(address, UriKind.Absolute, out var linkUri) &&
+                        linkUri.Scheme is "http" or "https" or "mailto")
+                    {
+                        target.Add(new Hyperlink(StyledRun(autolink.Url, style)) { NavigateUri = linkUri });
+                    }
+                    else target.Add(StyledRun(autolink.Url, style));
+                    break;
+                case ContainerInline child: AddInlines(target, child, style); break;
             }
         }
     }

@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -58,6 +59,9 @@ internal static class Checks
         Assert(centered.Left==-1200 && centered.Top==295,"centered on cursor with scaled pixel dimensions");
         var edge=DesktopIntegration.CenteredBounds(new DesktopIntegration.Point {X=-1919,Y=1039},work,480,450);
         Assert(edge.Left==-1920&&edge.Bottom==1040,"clamped to negative-coordinate monitor work area");
+        var shortWorkArea = new DesktopIntegration.Rect { Right = 640, Bottom = 240 };
+        var square = DesktopIntegration.CenteredBounds(new DesktopIntegration.Point { X = 320, Y = 120 }, shortWorkArea, 320, 320);
+        Assert(square.Right - square.Left == 240 && square.Bottom - square.Top == 240, "square note stays square when reduced to fit the work area");
         Assert(DesktopIntegration.HotkeyModifiers==0x4005&&DesktopIntegration.HotkeyKey==0x57,"Alt Shift W global shortcut with no repeat");
     }
     static void TestStore(string temp)
@@ -81,10 +85,20 @@ internal static class Checks
     {
         var doc=MarkdownView.Render("# Heading\n\n**bold** *italic* ~~strike~~ `code` [site](https://example.com)\n\n- [x] done\n- [ ] todo\n\n> quote\n\n```cs\nvar x = 1;\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |");
         Assert(doc.Blocks.FirstBlock is Paragraph p && p.FontSize==26,"Markdown heading renders");
-        Assert(doc.Blocks.OfType<System.Windows.Documents.List>().Any(),"Markdown task list renders");
+        var taskList = doc.Blocks.OfType<System.Windows.Documents.List>().Single();
+        var firstTask = (CheckBox)((InlineUIContainer)((Paragraph)taskList.ListItems.FirstListItem.Blocks.FirstBlock).Inlines.FirstInline).Child;
+        Assert(firstTask.IsChecked == true, "Markdown task list renders a checked task");
         Assert(doc.Blocks.OfType<Table>().Any(),"Markdown table renders");
         var text=new TextRange(doc.ContentStart,doc.ContentEnd).Text;
-        Assert(text.Contains("☑")&&text.Contains("var x = 1;")&&!text.Contains("**bold**"),"task marks and fenced code render without syntax delimiters");
+        Assert(text.Contains("var x = 1;")&&!text.Contains("**bold**"),"fenced code and emphasis render without syntax delimiters");
+        var writer = typeof(MarkdownView).Assembly.GetType("StickyNotesDemo.MarkdownWriter");
+        var saved = (string)writer.GetMethod("Write", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, [doc]);
+        var reopened = MarkdownView.Render(saved);
+        Assert(reopened.Blocks.OfType<Section>().Any() && reopened.Blocks.OfType<Table>().Any() &&
+               saved.Contains("https://example.com", StringComparison.Ordinal) &&
+               saved.Contains("- [x] done", StringComparison.Ordinal) &&
+               saved.Contains("\u0060\u0060\u0060cs\nvar x = 1;", StringComparison.Ordinal),
+               "rich document storage preserves quotes, tables, links, tasks and fenced code");
     }
     static object Invoke(object obj,string method,params object[] values) => obj.GetType().GetMethod(method,BindingFlags.Instance|BindingFlags.NonPublic).Invoke(obj,values);
     static void TestWindows(string temp,string output)
@@ -105,19 +119,32 @@ internal static class Checks
         Invoke(main,"RefreshList");
         Assert(!note.ShowInTaskbar && main.ShowInTaskbar,"only library window participates in taskbar");
         Assert(note.Topmost && note.Background==Brushes.Transparent && ((Border)note.Content).Background is SolidColorBrush,"previously unpinned note stays on top and uses solid rounded paper");
+        var noteWidth = (int)note.Width;
+        var noteHeight = (int)note.Height;
+        Assert(noteWidth == 320 && noteHeight == 320, "default note opens as a 320 by 320 square");
+        var noteSurface = (FrameworkElement)note.Content;
         Render((FrameworkElement)main.Content,478,720,Path.Combine(output,"library-preview.png"));
-        Render((FrameworkElement)note.Content,320,300,Path.Combine(output,"note-preview.png"));
+        Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-preview.png"));
         var search=(TextBox)main.FindName("SearchBox"); search.Text="fork";
         var list=(ItemsControl)main.FindName("NoteList");
         Assert(list.Items.Count==1,"search filters library cards");
-        var editor=Find<TextBox>((DependencyObject)note.Content);
-        editor.Text="# 自动渲染\n\n**编辑完成**";
+        var editor=Find<RichTextBox>((DependencyObject)note.Content);
+        var document = editor.Document;
+        var formatBar = (UniformGrid)typeof(Window2).GetField("footer", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(note);
+        var body = (FrameworkElement)VisualTreeHelper.GetParent(editor);
+        Rect BodyBounds() => new Rect(body.TranslatePoint(new Point(), noteSurface), body.RenderSize);
+        var readingBounds = BodyBounds();
         Invoke(note,"BeginEditing");
-        Render((FrameworkElement)note.Content,320,300,Path.Combine(output,"note-editing-preview.png"));
+        Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-editing-preview.png"));
+        Assert(BodyBounds() == readingBounds, "showing the toolbar keeps the body origin and size");
+        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
         Invoke(note,"FinishEditing");
-        var view=Find<FlowDocumentScrollViewer>((DependencyObject)note.Content);
-        Assert(editor.Visibility==Visibility.Collapsed&&view.Visibility==Visibility.Visible&&new TextRange(view.Document.ContentStart,view.Document.ContentEnd).Text.Contains("编辑完成"),"editing finishes into Markdown rendering without mode button");
-        editor.Text="";
+        noteSurface.UpdateLayout();
+        Assert(BodyBounds() == readingBounds, "hiding the toolbar keeps the body origin and size");
+        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
+        CheckRichEditing(note, editor, formatBar);
+        editor.Document.Blocks.Clear();
+        editor.Document.Blocks.Add(new Paragraph());
         var hint=(TextBlock)typeof(Window2).GetField("placeholder",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(note);
         Assert(hint.Visibility==Visibility.Visible,"empty inactive note shows placeholder");
         Invoke(note,"BeginEditing");
@@ -128,6 +155,67 @@ internal static class Checks
         Assert(close.Cancel&&!data.IsOpen,"closing note hides it and keeps data");
         var libraryClose=new CancelEventArgs(); Invoke(main,"OnClosing",libraryClose);
         Assert(libraryClose.Cancel&&!main.ShowInTaskbar,"closing library removes taskbar entry without exiting");
+    }
+    static void CheckRichEditing(Window2 note, RichTextBox editor, UniformGrid formatBar)
+    {
+        Invoke(note, "BeginEditing");
+        var paragraph = (Paragraph)editor.Document.Blocks.FirstBlock;
+        editor.Selection.Select(paragraph.ContentStart, paragraph.ContentEnd);
+        void ClickTool(string name)
+        {
+            var button = formatBar.Children.OfType<Button>().Single(item => ((string)item.ToolTip).StartsWith(name, StringComparison.Ordinal));
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+        ClickTool("粗体");
+        ClickTool("斜体");
+        ClickTool("下划线");
+        ClickTool("删除线");
+        var restored = (Paragraph)MarkdownView.Render(note.Data.Markdown).Blocks.FirstBlock;
+        var formatted = (Run)restored.Inlines.FirstInline;
+        Assert(formatted.FontWeight == FontWeights.Bold && formatted.FontStyle == FontStyles.Italic &&
+               formatted.TextDecorations.Count == 2 && !editor.Selection.IsEmpty, "bottom formatting applies to the selection and survives reopening");
+
+        void EnterText(string text)
+        {
+            var line = new Paragraph(new Run(text));
+            editor.Document.Blocks.Clear();
+            editor.Document.Blocks.Add(line);
+            editor.CaretPosition = line.ContentEnd;
+        }
+
+        EnterText("列表内容");
+        ClickTool("项目符号");
+        Assert(note.Data.Markdown.StartsWith("- 列表内容", StringComparison.Ordinal), "bottom tools create a bullet list");
+        ClickTool("编号");
+        Assert(note.Data.Markdown.StartsWith("1. 列表内容", StringComparison.Ordinal), "bottom tools convert a bullet list to numbering");
+        ClickTool("待办");
+        var taskParagraph = (Paragraph)((System.Windows.Documents.List)editor.Document.Blocks.FirstBlock).ListItems.FirstListItem.Blocks.FirstBlock;
+        var check = (CheckBox)taskParagraph.Inlines.OfType<InlineUIContainer>().Single().Child;
+        check.IsChecked = true;
+        Assert(note.Data.Markdown.StartsWith("- [x] 列表内容", StringComparison.Ordinal), "task checkbox saves its checked state");
+
+        EnterText("code");
+        editor.Selection.Select(editor.Document.ContentStart, editor.Document.ContentEnd);
+        ClickTool("行内代码");
+        Assert(note.Data.Markdown.Contains("\u0060code\u0060", StringComparison.Ordinal), "bottom inline code tool persists the selected text");
+
+        EnterText("##");
+        Assert((bool)Invoke(editor, "ApplyMarkdownInput", " ") &&
+               ((Paragraph)editor.Document.Blocks.FirstBlock).FontSize == 22, "typing a heading prefix formats only the active paragraph");
+        EnterText("已有文字 **粗体**");
+        Assert((bool)Invoke(editor, "ApplyMarkdownInput", " ") && note.Data.Markdown.Contains("<strong>粗体</strong>", StringComparison.Ordinal) &&
+               !note.PlainText.Contains("**", StringComparison.Ordinal), "inline Markdown shortcut converts text at the caret");
+        editor.Undo();
+        Assert(note.PlainText == "已有文字 **粗体**", "undo restores the local Markdown shortcut input");
+        editor.Redo();
+        Assert(note.Data.Markdown.Contains("<strong>粗体</strong>", StringComparison.Ordinal), "redo restores rich formatting");
+        EnterText("前文");
+        var pasted = (bool)Invoke(editor, "PasteMarkdown", "## 粘贴标题\n\n- [x] 完成\n- [ ] 下一步");
+        Assert(pasted &&
+               note.PlainText.Contains("前文", StringComparison.Ordinal) &&
+               note.Data.Markdown.Contains("## 粘贴标题", StringComparison.Ordinal) &&
+               note.Data.Markdown.Contains("- [x] 完成", StringComparison.Ordinal), "pasting Markdown preserves existing text and stores formatted blocks");
+        Invoke(note, "FinishEditing");
     }
     static T Find<T>(DependencyObject root) where T:DependencyObject
     {

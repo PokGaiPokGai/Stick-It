@@ -10,14 +10,16 @@ namespace StickyNotesDemo;
 
 public sealed class NoteData
 {
+    private const double DefaultSide = 320;
+
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Markdown { get; set; } = "";
     public string Color { get; set; } = "#FFF7C2";
     public DateTime Modified { get; set; } = DateTime.Now;
     public double Left { get; set; } = 100;
     public double Top { get; set; } = 100;
-    public double Width { get; set; } = 320;
-    public double Height { get; set; } = 300;
+    public double Width { get; set; } = DefaultSide;
+    public double Height { get; set; } = DefaultSide;
     public bool IsOpen { get; set; } = true;
 }
 

@@ -47,8 +47,18 @@ public static class DesktopIntegration
 
     public static Rect CenteredBounds(Point center, Rect work, int width, int height)
     {
-        width = Math.Min(width, work.Right - work.Left);
-        height = Math.Min(height, work.Bottom - work.Top);
+        var workWidth = work.Right - work.Left;
+        var workHeight = work.Bottom - work.Top;
+        if (width == height)
+        {
+            var side = Math.Min(width, Math.Min(workWidth, workHeight));
+            width = height = side;
+        }
+        else
+        {
+            width = Math.Min(width, workWidth);
+            height = Math.Min(height, workHeight);
+        }
         var left = Math.Clamp(center.X - width / 2, work.Left, work.Right - width);
         var top = Math.Clamp(center.Y - height / 2, work.Top, work.Bottom - height);
         return new Rect { Left=left, Top=top, Right=left+width, Bottom=top+height };
