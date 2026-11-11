@@ -34,8 +34,7 @@ public partial class MainWindow : Window
     public void Start()
     {
         foreach (var data in store.Load()) AddNote(data);
-        using (var stream=Application.GetResourceStream(new Uri("pack://application:,,,/Stick It;component/Assets/StickIt.ico")).Stream)
-        using (var icon=new System.Drawing.Icon(stream)) trayArtwork=(System.Drawing.Icon)icon.Clone();
+        trayArtwork = LoadTrayArtwork();
         trayMenu=new System.Windows.Forms.ContextMenuStrip();
         trayMenu.Items.Add("打开便签列表",null,(_,_)=>ShowLibrary());
         trayMenu.Items.Add("新建便签    Shift + Alt + W",null,(_,_)=>CreateNote());
@@ -47,6 +46,15 @@ public partial class MainWindow : Window
         foreach (var note in notes.Where(n=>n.Data.IsOpen)) note.Open();
         RefreshList();
     }
+
+    private static System.Drawing.Icon LoadTrayArtwork()
+    {
+        using var stream = Application.GetResourceStream(
+            new Uri("pack://application:,,,/Stick It;component/Assets/StickIt.ico")).Stream;
+        // NotifyIcon submits this handle directly to Windows, so select the small frame here.
+        return new System.Drawing.Icon(stream, DesktopIntegration.TrayIconSize());
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);

@@ -22,6 +22,29 @@ public static class DesktopIntegration
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
     [DllImport("user32.dll", SetLastError=true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr FindWindowW(string className, string windowName);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+
+    internal static System.Drawing.Size TrayIconSize()
+    {
+        const int smallIconWidth = 49;
+        const int smallIconHeight = 50;
+        var taskbar = FindWindowW("Shell_TrayWnd", null);
+        var dpi = GetDpiForWindow(taskbar);
+        if (dpi == 0)
+            return System.Windows.Forms.SystemInformation.SmallIconSize;
+
+        return new System.Drawing.Size(
+            GetSystemMetricsForDpi(smallIconWidth, dpi),
+            GetSystemMetricsForDpi(smallIconHeight, dpi));
+    }
+
     public static Rect CenteredBounds(Point center, Rect work, int width, int height)
     {
         width = Math.Min(width, work.Right - work.Left);
