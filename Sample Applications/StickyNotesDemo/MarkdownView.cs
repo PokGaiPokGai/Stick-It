@@ -29,13 +29,20 @@ public static class MarkdownView
     public static FlowDocument Render(string markdown)
         => Render(Markdig.Markdown.Parse(markdown, Pipeline));
 
-    internal static FlowDocument ReadFormattedPaste(string text)
+    internal static FlowDocument ReadFormattedPaste(string text, bool allowIndentedCode)
     {
         var parsed = Markdig.Markdown.Parse(text, Pipeline);
-        return parsed.Any(block => block is not ParagraphBlock paragraph ||
-            paragraph.Inline?.Any(inline => inline is EmphasisInline or CodeInline or LinkInline or AutolinkInline) == true)
-            ? Render(parsed)
-            : null;
+        var formatted = parsed.Any(block => block switch
+        {
+            HeadingBlock or ListBlock or QuoteBlock or FencedCodeBlock or ThematicBreakBlock or Markdig.Extensions.Tables.Table => true,
+            CodeBlock => allowIndentedCode,
+            ParagraphBlock { Inline: { } content } => content.Any(inline =>
+                inline is EmphasisInline or CodeInline or LinkInline or AutolinkInline ||
+                inline is HtmlInline { Tag: "<strong>" or "<em>" or "<u>" or "<s>" or "<br>" }),
+            HtmlBlock html => html.Lines.ToString().Trim() == "<br>",
+            _ => false
+        });
+        return formatted ? Render(parsed) : null;
     }
 
     internal static (int Start, Paragraph Content)? ReadInlineShortcut(string text, bool codeOnly)

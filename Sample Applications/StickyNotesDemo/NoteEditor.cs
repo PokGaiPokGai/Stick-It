@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using static StickyNotesDemo.MarkdownView;
 
 namespace StickyNotesDemo;
@@ -14,6 +15,12 @@ namespace StickyNotesDemo;
 internal sealed class NoteEditor : RichTextBox
 {
     private const string Backtick = "\u0060";
+    private const string FormattedNoteClipboard = "StickIt.FormattedNote";
+    private static readonly ResourceDictionary TaskStyles = new()
+    {
+        Source = new Uri("pack://application:,,,/Stick It;component/Assets/TaskStyles.xaml")
+    };
+    private bool changingDocument;
 
     internal NoteEditor(string markdown) : base(Render(markdown))
     {
@@ -24,9 +31,15 @@ internal sealed class NoteEditor : RichTextBox
         BorderThickness = new Thickness(0);
         Background = Brushes.Transparent;
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-        TextChanged += (_, _) => DocumentEdited?.Invoke();
+        Resources.MergedDictionaries.Add(TaskStyles);
+        TextChanged += (_, e) =>
+        {
+            DocumentEdited?.Invoke();
+            QueueMarkdownInput(e);
+        };
         AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler(TaskChanged));
         AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler(TaskChanged));
+        DataObject.AddCopyingHandler(this, (_, e) => e.DataObject.SetData(FormattedNoteClipboard, "1", false));
         DataObject.AddPastingHandler(this, Paste);
     }
 
@@ -122,32 +135,36 @@ internal sealed class NoteEditor : RichTextBox
         }
     }
 
-    protected override void OnPreviewTextInput(TextCompositionEventArgs e)
+    private void QueueMarkdownInput(TextChangedEventArgs e)
     {
-        base.OnPreviewTextInput(e);
-        if (!e.Handled && ApplyMarkdownInput(e.Text)) e.Handled = true;
-    }
-
-    internal bool ApplyMarkdownInput(string input)
-    {
-        if (IsReadOnly || !Selection.IsEmpty || input is not (" " or Backtick) ||
+        if (changingDocument || IsReadOnly || !Selection.IsEmpty || e.UndoAction is UndoAction.Undo or UndoAction.Redo ||
             CaretPosition.Paragraph is not { } paragraph || paragraph.Tag is CodeBlockInfo)
-            return false;
+            return;
 
-        var prefix = new TextRange(paragraph.ContentStart, CaretPosition).Text;
-        if (input == " " && ApplyBlockShortcut(paragraph, prefix))
-            return true;
+        var caret = CaretPosition;
+        var beforeTrigger = caret.GetNextInsertionPosition(LogicalDirection.Backward);
+        if (beforeTrigger?.Paragraph != paragraph) return;
+        var input = new TextRange(beforeTrigger, caret).Text;
+        if (input == "\u3000") input = " ";
+        if (input is not (" " or Backtick)) return;
 
+        var triggerStart = Document.ContentStart.GetOffsetToPosition(beforeTrigger);
+        var triggerEnd = Document.ContentStart.GetOffsetToPosition(caret);
+        if (!e.Changes.Any(change => change.AddedLength > 0 &&
+                change.Offset <= triggerStart && change.Offset + change.AddedLength >= triggerEnd))
+            return;
+
+        var prefix = new TextRange(paragraph.ContentStart, beforeTrigger).Text;
+        if (input == " " && QueueBlockShortcut(paragraph, prefix, caret)) return;
         var candidate = input == Backtick ? prefix + input : prefix;
         if (candidate.Length == 0 || candidate[^1] is not ('*' or '_' or '~' or '+' or (char)0x60 or ')' or '>') ||
             ReadInlineShortcut(candidate, input == Backtick) is not { } shortcut)
-            return false;
+            return;
 
-        var start = MoveBackByText(CaretPosition, prefix.Length - shortcut.Start);
-        if (start == null) return false;
-        Change(() =>
+        var start = MoveBackByText(beforeTrigger, prefix.Length - shortcut.Start);
+        if (start == null) return;
+        ApplyAfterInput(start, caret, range =>
         {
-            var range = new TextRange(start, CaretPosition);
             range.Text = "";
             if (input == " ") shortcut.Content.Inlines.Add(new Run(" "));
             InsertInlines(shortcut.Content, range.Start);
@@ -157,10 +174,9 @@ internal sealed class NoteEditor : RichTextBox
                 Selection.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Transparent);
             }
         });
-        return true;
     }
 
-    private bool ApplyBlockShortcut(Paragraph paragraph, string prefix)
+    private bool QueueBlockShortcut(Paragraph paragraph, string prefix, TextPointer end)
     {
         Action format;
         if (prefix.Length is >= 1 and <= 6 && prefix.All(character => character == '#'))
@@ -177,14 +193,38 @@ internal sealed class NoteEditor : RichTextBox
             format = () => SetCodeBlock(paragraph, "");
         else return false;
 
-        Change(() =>
+        ApplyAfterInput(paragraph.ContentStart, end, marker =>
         {
-            var marker = new TextRange(paragraph.ContentStart, CaretPosition);
             marker.Text = "";
             CaretPosition = paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
             format();
         });
         return true;
+    }
+
+    private void ApplyAfterInput(TextPointer start, TextPointer end, Action<TextRange> apply)
+    {
+        var document = Document;
+        start = start.GetPositionAtOffset(0, LogicalDirection.Forward);
+        end = end.GetPositionAtOffset(0, LogicalDirection.Backward);
+        var original = new TextRange(start, end).Text;
+
+        // WPF batches keystrokes. Wait for the native edit to finish, and keep
+        // this range anchored before any characters typed after the shortcut.
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (IsReadOnly || !ReferenceEquals(Document, document) || start.CompareTo(end) >= 0) return;
+            var range = new TextRange(start, end);
+            if (range.Text != original) return;
+            var caretAtTrigger = Selection.IsEmpty && CaretPosition.CompareTo(end) == 0;
+            var selectionStart = Selection.Start.GetPositionAtOffset(0, LogicalDirection.Forward);
+            var selectionEnd = Selection.End.GetPositionAtOffset(0, LogicalDirection.Forward);
+            Change(() =>
+            {
+                apply(range);
+                if (!caretAtTrigger) Selection.Select(selectionStart, selectionEnd);
+            });
+        }, DispatcherPriority.Input);
     }
 
     private void InsertTask(Paragraph paragraph, bool isChecked)
@@ -214,7 +254,7 @@ internal sealed class NoteEditor : RichTextBox
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
-        if (e.Handled || IsReadOnly || e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None ||
+        if (e.Handled || IsReadOnly || e.Key != Key.Enter || e.KeyboardDevice.Modifiers != ModifierKeys.None ||
             !Selection.IsEmpty || CaretPosition.Paragraph is not { } paragraph) return;
 
         if (paragraph.Tag is CodeBlockInfo)
@@ -237,17 +277,15 @@ internal sealed class NoteEditor : RichTextBox
 
     private void Paste(object sender, DataObjectPastingEventArgs e)
     {
-        if ((e.FormatToApply == DataFormats.UnicodeText || e.FormatToApply == DataFormats.Text) &&
-            e.SourceDataObject.GetData(DataFormats.UnicodeText) is string text && PasteMarkdown(text))
-            e.CancelCommand();
-    }
-
-    internal bool PasteMarkdown(string text)
-    {
-        var fragment = ReadFormattedPaste(text);
-        if (fragment == null) return false;
+        var clipboard = e.SourceDataObject;
+        if (e.IsDragDrop || clipboard.GetDataPresent(FormattedNoteClipboard, false)) return;
+        var text = clipboard.GetData(DataFormats.UnicodeText) as string ?? clipboard.GetData(DataFormats.Text) as string;
+        if (text == null) return;
+        var plainText = e.FormatToApply == DataFormats.UnicodeText || e.FormatToApply == DataFormats.Text;
+        var fragment = ReadFormattedPaste(text, allowIndentedCode: plainText);
+        if (fragment == null) return;
         Change(() => InsertFragment(fragment));
-        return true;
+        e.CancelCommand();
     }
 
     private void InsertFragment(FlowDocument fragment)
@@ -314,8 +352,13 @@ internal sealed class NoteEditor : RichTextBox
     private void Change(Action action)
     {
         BeginChange();
+        changingDocument = true;
         try { action(); }
-        finally { EndChange(); }
+        finally
+        {
+            EndChange();
+            changingDocument = false;
+        }
         DocumentEdited?.Invoke();
     }
 }

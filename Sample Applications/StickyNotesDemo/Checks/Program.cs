@@ -10,8 +10,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using StickyNotesDemo;
 
 internal static class Checks
@@ -125,6 +127,8 @@ internal static class Checks
         var noteSurface = (FrameworkElement)note.Content;
         Render((FrameworkElement)main.Content,478,720,Path.Combine(output,"library-preview.png"));
         Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-preview.png"));
+        var tasks = new Window2(new NoteData { Markdown = "## 今日待办\n\n- [ ] 整理设计参考\n- [x] 保存便签改动" });
+        Render((FrameworkElement)tasks.Content, (int)tasks.Width, (int)tasks.Height, Path.Combine(output, "tasks-preview.png"));
         var search=(TextBox)main.FindName("SearchBox"); search.Text="fork";
         var list=(ItemsControl)main.FindName("NoteList");
         Assert(list.Items.Count==1,"search filters library cards");
@@ -183,6 +187,26 @@ internal static class Checks
             editor.CaretPosition = line.ContentEnd;
         }
 
+        var keyboard = new OfflineKeyboard();
+        var inputSource = new OfflineInputSource { RootVisual = editor };
+        void DrainInput() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+        void Type(string text)
+        {
+            var composition = new TextComposition(InputManager.Current, editor, text);
+            editor.RaiseEvent(new TextCompositionEventArgs(keyboard, composition) { RoutedEvent = TextCompositionManager.TextInputEvent });
+        }
+        void PressSpace(bool drain = true)
+        {
+            var key = new KeyEventArgs(keyboard, inputSource, 0, Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            editor.RaiseEvent(key);
+            if (!key.Handled)
+            {
+                key.RoutedEvent = Keyboard.KeyDownEvent;
+                editor.RaiseEvent(key);
+            }
+            if (drain) DrainInput();
+        }
+
         EnterText("列表内容");
         ClickTool("项目符号");
         Assert(note.Data.Markdown.StartsWith("- 列表内容", StringComparison.Ordinal), "bottom tools create a bullet list");
@@ -199,23 +223,71 @@ internal static class Checks
         ClickTool("行内代码");
         Assert(note.Data.Markdown.Contains("\u0060code\u0060", StringComparison.Ordinal), "bottom inline code tool persists the selected text");
 
-        EnterText("##");
-        Assert((bool)Invoke(editor, "ApplyMarkdownInput", " ") &&
-               ((Paragraph)editor.Document.Blocks.FirstBlock).FontSize == 22, "typing a heading prefix formats only the active paragraph");
+        EnterText("");
+        Type("#");
+        Type("#");
+        PressSpace(drain: false);
+        Type("标题");
+        DrainInput();
+        Assert(note.PlainText == "标题" && ((Paragraph)editor.Document.Blocks.FirstBlock).FontSize == 22,
+               "queued WPF typing and Space turn the prefix into a heading");
         EnterText("已有文字 **粗体**");
-        Assert((bool)Invoke(editor, "ApplyMarkdownInput", " ") && note.Data.Markdown.Contains("<strong>粗体</strong>", StringComparison.Ordinal) &&
-               !note.PlainText.Contains("**", StringComparison.Ordinal), "inline Markdown shortcut converts text at the caret");
+        PressSpace(drain: false);
+        Type("接着写");
+        DrainInput();
+        Assert(note.Data.Markdown.Contains("<strong>粗体</strong> 接着写", StringComparison.Ordinal) &&
+               !note.PlainText.Contains("**", StringComparison.Ordinal), "the WPF space key route converts inline Markdown");
         editor.Undo();
-        Assert(note.PlainText == "已有文字 **粗体**", "undo restores the local Markdown shortcut input");
+        Assert(note.PlainText == "已有文字 **粗体** 接着写", "undo restores the Markdown syntax without dropping subsequent input");
         editor.Redo();
         Assert(note.Data.Markdown.Contains("<strong>粗体</strong>", StringComparison.Ordinal), "redo restores rich formatting");
+        EnterText("");
+        Type("-");
+        PressSpace(drain: false);
+        Type("列表");
+        DrainInput();
+        Assert(note.Data.Markdown.StartsWith("- 列表", StringComparison.Ordinal), "queued Space also formats a list prefix");
+        EnterText("普通文字");
+        PressSpace();
+        Assert(note.PlainText == "普通文字 ", "ordinary spaces keep their native behavior");
+        EnterText("**文字**");
+        Type("\u3000");
+        DrainInput();
+        Assert(note.Data.Markdown.Contains("<strong>文字</strong>", StringComparison.Ordinal), "committed ideographic space converts Markdown");
         EnterText("前文");
-        var pasted = (bool)Invoke(editor, "PasteMarkdown", "## 粘贴标题\n\n- [x] 完成\n- [ ] 下一步");
-        Assert(pasted &&
+        var clipboard = new DataObject();
+        clipboard.SetData(DataFormats.UnicodeText, "## 粘贴标题\n\n- [x] 完成\n- [ ] 下一步");
+        clipboard.SetData(DataFormats.Rtf, @"{\rtf1\ansi Markdown source}");
+        var paste = new DataObjectPastingEventArgs(clipboard, false, DataFormats.Rtf);
+        editor.RaiseEvent(paste);
+        Assert(paste.CommandCancelled &&
                note.PlainText.Contains("前文", StringComparison.Ordinal) &&
                note.Data.Markdown.Contains("## 粘贴标题", StringComparison.Ordinal) &&
-               note.Data.Markdown.Contains("- [x] 完成", StringComparison.Ordinal), "pasting Markdown preserves existing text and stores formatted blocks");
+               note.Data.Markdown.Contains("- [x] 完成", StringComparison.Ordinal), "the WPF paste route formats Markdown even when RTF is preferred");
+        EnterText("");
+        var textClipboard = new DataObject(DataFormats.UnicodeText, "**纯文本粘贴**");
+        var textPaste = new DataObjectPastingEventArgs(textClipboard, false, DataFormats.UnicodeText);
+        editor.RaiseEvent(textPaste);
+        Assert(textPaste.CommandCancelled && note.Data.Markdown.Contains("<strong>纯文本粘贴</strong>", StringComparison.Ordinal),
+               "the WPF plain-text paste route inserts rich content");
+        var copiedNote = new DataObject(DataFormats.UnicodeText, "## 保留原样");
+        editor.RaiseEvent(new DataObjectCopyingEventArgs(copiedNote, false));
+        var internalPaste = new DataObjectPastingEventArgs(copiedNote, false, DataFormats.UnicodeText);
+        editor.RaiseEvent(internalPaste);
+        Assert(!internalPaste.CommandCancelled, "formatted content copied within Stick It keeps the native paste path");
         Invoke(note, "FinishEditing");
+    }
+
+    private sealed class OfflineKeyboard() : KeyboardDevice(InputManager.Current)
+    {
+        protected override KeyStates GetKeyStatesFromSystem(Key key) => KeyStates.None;
+    }
+
+    private sealed class OfflineInputSource : PresentationSource
+    {
+        public override Visual RootVisual { get; set; }
+        public override bool IsDisposed => false;
+        protected override CompositionTarget GetCompositionTargetCore() => null;
     }
     static T Find<T>(DependencyObject root) where T:DependencyObject
     {
