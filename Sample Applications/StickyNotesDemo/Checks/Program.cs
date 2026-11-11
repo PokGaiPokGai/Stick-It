@@ -105,7 +105,9 @@ internal static class Checks
         Assert(list.Items.Count==1,"search filters library cards");
         var editor=Find<TextBox>((DependencyObject)note.Content);
         editor.Text="# 自动渲染\n\n**编辑完成**";
-        Invoke(note,"BeginEditing"); Invoke(note,"FinishEditing");
+        Invoke(note,"BeginEditing");
+        Render((FrameworkElement)note.Content,320,300,Path.Combine(output,"note-editing-preview.png"));
+        Invoke(note,"FinishEditing");
         var view=Find<FlowDocumentScrollViewer>((DependencyObject)note.Content);
         Assert(editor.Visibility==Visibility.Collapsed&&view.Visibility==Visibility.Visible&&new TextRange(view.Document.ContentStart,view.Document.ContentEnd).Text.Contains("编辑完成"),"editing finishes into Markdown rendering without mode button");
         editor.Text="";
