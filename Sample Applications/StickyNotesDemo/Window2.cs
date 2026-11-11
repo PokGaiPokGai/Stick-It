@@ -45,8 +45,6 @@ public sealed class Window2 : Window
         header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0), Height=34, Visibility=Visibility.Collapsed };
         header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState==MouseButtonState.Pressed) DragMove(); };
         layout.Children.Add(header);
-        var grip=new TextBlock { Text="···", Foreground=new SolidColorBrush(Color.FromArgb(80,0,0,0)), VerticalAlignment=VerticalAlignment.Center, FontSize=18 };
-        header.Children.Add(grip);
         var actions=new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Right };
         header.Children.Add(actions);
         pin=IconButton("\uE718", "置顶"); pin.Opacity=data.Pinned ? .8 : .35;

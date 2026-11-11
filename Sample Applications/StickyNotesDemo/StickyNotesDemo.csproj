@@ -9,7 +9,7 @@
     <AssemblyName>Stick It</AssemblyName>
     <Product>Stick It</Product>
     <Title>Stick It</Title>
-    <Version>0.3.4</Version>
+    <Version>0.3.5</Version>
     <ApplicationIcon>Assets/StickIt.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
