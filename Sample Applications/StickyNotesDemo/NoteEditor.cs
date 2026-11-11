@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Threading;
 using static StickyNotesDemo.MarkdownView;
@@ -27,6 +28,10 @@ internal sealed partial class NoteEditor : RichTextBox
 
     internal NoteEditor(string markdown) : base(Render(markdown))
     {
+        // WPF stamps a different input language onto the first typed run,
+        // which clears pending character formatting. Match the input layout
+        // when loading a note so its first keystroke keeps those marks.
+        Document.Language = XmlLanguage.GetLanguage(InputLanguageManager.Current.CurrentInputLanguage.IetfLanguageTag);
         IsReadOnly = true;
         IsDocumentEnabled = true;
         AcceptsTab = true;
@@ -60,43 +65,6 @@ internal sealed partial class NoteEditor : RichTextBox
         if (changeDepth == 0) DocumentEdited?.Invoke();
     }
 
-    internal void ToggleMark(InlineStyle style)
-    {
-        CommitTyping();
-        Change(() =>
-        {
-            switch (style)
-            {
-                case InlineStyle.Bold:
-                    EditingCommands.ToggleBold.Execute(null, this);
-                    break;
-                case InlineStyle.Italic:
-                    EditingCommands.ToggleItalic.Execute(null, this);
-                    break;
-                case InlineStyle.Underline:
-                case InlineStyle.Strike:
-                    var decoration = style == InlineStyle.Underline ? TextDecorations.Underline : TextDecorations.Strikethrough;
-                    var location = decoration[0].Location;
-                    var remove = Selection.GetPropertyValue(Inline.TextDecorationsProperty) is TextDecorationCollection current
-                        && current.Any(item => item.Location == location);
-                    var ranges = Selection.IsEmpty ? [Selection] : SelectedTextRuns().ToArray();
-                    foreach (var range in ranges)
-                    {
-                        var previous = range.GetPropertyValue(Inline.TextDecorationsProperty) as TextDecorationCollection;
-                        var updated = new TextDecorationCollection(previous?.Where(item => item.Location != location) ?? Enumerable.Empty<TextDecoration>());
-                        if (!remove) updated.Add(decoration);
-                        range.ApplyPropertyValue(Inline.TextDecorationsProperty, updated);
-                    }
-                    break;
-                case InlineStyle.Code:
-                    var isCode = Selection.GetPropertyValue(TextElement.FontFamilyProperty) is FontFamily font && font.Source == CodeFont.Source;
-                    Selection.ApplyPropertyValue(TextElement.FontFamilyProperty, isCode ? Document.FontFamily : CodeFont);
-                    Selection.ApplyPropertyValue(TextElement.BackgroundProperty, isCode ? Brushes.Transparent : InlineCodeBackground);
-                    break;
-            }
-        });
-    }
-
     private IEnumerable<Paragraph> SelectedParagraphs()
     {
         if (Selection.IsEmpty)
@@ -112,19 +80,6 @@ internal sealed partial class NoteEditor : RichTextBox
              point = point.GetNextContextPosition(LogicalDirection.Forward))
         {
             if (point.Paragraph is { } paragraph && found.Add(paragraph)) yield return paragraph;
-        }
-    }
-
-    private IEnumerable<TextRange> SelectedTextRuns()
-    {
-        var end = Selection.End;
-        for (var point = Selection.Start; point.CompareTo(end) < 0;)
-        {
-            var next = point.GetNextContextPosition(LogicalDirection.Forward);
-            if (next.CompareTo(end) > 0) next = end;
-            if (point.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text)
-                yield return new TextRange(point, next);
-            point = next;
         }
     }
 

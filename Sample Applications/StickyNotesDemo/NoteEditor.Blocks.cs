@@ -130,6 +130,10 @@ internal sealed partial class NoteEditor
 
         if (command == EditingCommands.ToggleBullets || command == EditingCommands.ToggleNumbering)
             ToggleList(command == EditingCommands.ToggleNumbering);
+        else if (command == EditingCommands.ToggleBold)
+            ToggleMark(InlineStyle.Bold);
+        else if (command == EditingCommands.ToggleItalic)
+            ToggleMark(InlineStyle.Italic);
         else if (command == EditingCommands.ToggleUnderline)
             ToggleMark(InlineStyle.Underline);
         else if (command == EditingCommands.TabForward || command == EditingCommands.TabBackward ||

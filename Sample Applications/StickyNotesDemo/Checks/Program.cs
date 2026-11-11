@@ -29,7 +29,7 @@ internal static partial class Checks
             TestSingleInstance(); TestPlacement();
             var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
 
-            TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output);
+            TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
             Console.WriteLine("All checks passed. No window, tray icon, hotkey, or desktop input was activated."); return 0;
         } catch(Exception error) { Console.Error.WriteLine(error); return 1; } finally { Directory.Delete(temp,true); }
     }
@@ -167,8 +167,7 @@ internal static partial class Checks
         editor.Selection.Select(paragraph.ContentStart, paragraph.ContentEnd);
         void ClickTool(string name)
         {
-            var button = formatBar.Children.OfType<Button>().Single(item => ((string)item.ToolTip).StartsWith(name, StringComparison.Ordinal));
-            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            FormatToggle(FindFormatButton(formatBar, name)).Toggle();
         }
         ClickTool("粗体");
         ClickTool("斜体");
