@@ -12,7 +12,7 @@ using static StickyNotesDemo.MarkdownView;
 
 namespace StickyNotesDemo;
 
-internal sealed class NoteEditor : RichTextBox
+internal sealed partial class NoteEditor : RichTextBox
 {
     private const string Backtick = "\u0060";
     private const string FormattedNoteClipboard = "StickIt.FormattedNote";
@@ -20,7 +20,10 @@ internal sealed class NoteEditor : RichTextBox
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/TaskStyles.xaml")
     };
-    private bool changingDocument;
+    private readonly Queue<Action> markdownEdits = new();
+    private DispatcherOperation markdownCommit;
+    private bool typingPending;
+    private int changeDepth;
 
     internal NoteEditor(string markdown) : base(Render(markdown))
     {
@@ -34,9 +37,14 @@ internal sealed class NoteEditor : RichTextBox
         Resources.MergedDictionaries.Add(TaskStyles);
         TextChanged += (_, e) =>
         {
+            typingPending = false;
+            if (changeDepth != 0) return;
             DocumentEdited?.Invoke();
             QueueMarkdownInput(e);
         };
+        CommandManager.AddPreviewExecutedHandler(this, OnEditingCommand);
+        AddHandler(TextCompositionManager.TextInputEvent,
+            new TextCompositionEventHandler((_, _) => typingPending = !IsReadOnly), handledEventsToo: true);
         AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler(TaskChanged));
         AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler(TaskChanged));
         DataObject.AddCopyingHandler(this, (_, e) => e.DataObject.SetData(FormattedNoteClipboard, "1", false));
@@ -47,37 +55,14 @@ internal sealed class NoteEditor : RichTextBox
     internal string PlainText => new TextRange(Document.ContentStart, Document.ContentEnd).Text.TrimEnd('\r', '\n');
     internal string Markdown => MarkdownWriter.Write(Document);
 
-    private void TaskChanged(object sender, RoutedEventArgs e) => DocumentEdited?.Invoke();
-
-    internal void ToggleHeading()
+    private void TaskChanged(object sender, RoutedEventArgs e)
     {
-        var paragraphs = SelectedParagraphs().Where(p => p.Tag is not CodeBlockInfo and not BlockStyle.Divider).ToArray();
-        var level = paragraphs.All(p => HeadingLevel(p) > 0) ? 0 : 2;
-        Change(() =>
-        {
-            foreach (var paragraph in paragraphs) SetHeading(paragraph, level);
-        });
-    }
-
-    internal void ToggleList(bool ordered)
-        => Change(() => (ordered ? EditingCommands.ToggleNumbering : EditingCommands.ToggleBullets).Execute(null, this));
-
-    internal void ToggleTask()
-    {
-        var paragraphs = SelectedParagraphs().Where(p => p.Tag is not CodeBlockInfo and not BlockStyle.Divider).ToArray();
-        Change(() =>
-        {
-            foreach (var paragraph in paragraphs)
-            {
-                var marker = paragraph.Inlines.OfType<InlineUIContainer>().FirstOrDefault(inline => inline.Child is CheckBox);
-                if (marker?.Child is CheckBox check) check.IsChecked = check.IsChecked != true;
-                else InsertTask(paragraph, false);
-            }
-        });
+        if (changeDepth == 0) DocumentEdited?.Invoke();
     }
 
     internal void ToggleMark(InlineStyle style)
     {
+        CommitTyping();
         Change(() =>
         {
             switch (style)
@@ -114,8 +99,16 @@ internal sealed class NoteEditor : RichTextBox
 
     private IEnumerable<Paragraph> SelectedParagraphs()
     {
+        if (Selection.IsEmpty)
+        {
+            if (CaretPosition.Paragraph is { } paragraph) yield return paragraph;
+            yield break;
+        }
         var found = new HashSet<Paragraph>();
-        for (var point = Selection.Start; point != null && point.CompareTo(Selection.End) <= 0;
+        var end = Selection.End;
+        if (end.Paragraph is { } last && end.CompareTo(NoteLists.TextStart(last)) <= 0)
+            end = last.ElementStart;
+        for (var point = Selection.Start; point != null && point.CompareTo(end) < 0;
              point = point.GetNextContextPosition(LogicalDirection.Forward))
         {
             if (point.Paragraph is { } paragraph && found.Add(paragraph)) yield return paragraph;
@@ -137,8 +130,8 @@ internal sealed class NoteEditor : RichTextBox
 
     private void QueueMarkdownInput(TextChangedEventArgs e)
     {
-        if (changingDocument || IsReadOnly || !Selection.IsEmpty || e.UndoAction is UndoAction.Undo or UndoAction.Redo ||
-            CaretPosition.Paragraph is not { } paragraph || paragraph.Tag is CodeBlockInfo)
+        if (IsReadOnly || !Selection.IsEmpty || e.UndoAction is UndoAction.Undo or UndoAction.Redo ||
+            CaretPosition.Paragraph is not { } paragraph || FormatOf(paragraph) is CodeBlockInfo or BlockStyle.Divider)
             return;
 
         var caret = CaretPosition;
@@ -154,7 +147,9 @@ internal sealed class NoteEditor : RichTextBox
                 change.Offset <= triggerStart && change.Offset + change.AddedLength >= triggerEnd))
             return;
 
-        var prefix = new TextRange(paragraph.ContentStart, beforeTrigger).Text;
+        var textStart = NoteLists.TextStart(paragraph);
+        if (beforeTrigger.CompareTo(textStart) < 0) return;
+        var prefix = NoteLists.InlineText(textStart, beforeTrigger);
         if (input == " " && QueueBlockShortcut(paragraph, prefix, caret)) return;
         var candidate = input == Backtick ? prefix + input : prefix;
         if (candidate.Length == 0 || candidate[^1] is not ('*' or '_' or '~' or '+' or (char)0x60 or ')' or '>') ||
@@ -163,8 +158,11 @@ internal sealed class NoteEditor : RichTextBox
 
         var start = MoveBackByText(beforeTrigger, prefix.Length - shortcut.Start);
         if (start == null) return;
-        ApplyAfterInput(start, caret, range =>
+        ApplyAfterInput(start, caret, (range, atTrigger) =>
         {
+            var selectionStart = Selection.Start.GetPositionAtOffset(0, LogicalDirection.Forward);
+            var selectionEnd = Selection.End.GetPositionAtOffset(0, LogicalDirection.Forward);
+            var backward = IsBackwardSelection();
             range.Text = "";
             if (input == " ") shortcut.Content.Inlines.Add(new Run(" "));
             InsertInlines(shortcut.Content, range.Start);
@@ -173,6 +171,11 @@ internal sealed class NoteEditor : RichTextBox
                 Selection.ApplyPropertyValue(TextElement.FontFamilyProperty, Document.FontFamily);
                 Selection.ApplyPropertyValue(TextElement.BackgroundProperty, Brushes.Transparent);
             }
+            if (!atTrigger)
+            {
+                if (backward) Selection.Select(selectionEnd, selectionStart);
+                else Selection.Select(selectionStart, selectionEnd);
+            }
         });
     }
 
@@ -180,29 +183,36 @@ internal sealed class NoteEditor : RichTextBox
     {
         Action format;
         if (prefix.Length is >= 1 and <= 6 && prefix.All(character => character == '#'))
-            format = () => SetHeading(paragraph, prefix.Length);
-        else if ((prefix is "-" or "*") && paragraph.Parent is not ListItem)
-            format = () => EditingCommands.ToggleBullets.Execute(null, this);
-        else if (prefix == "1." && paragraph.Parent is not ListItem)
-            format = () => EditingCommands.ToggleNumbering.Execute(null, this);
+            format = () => SetParagraphHeading([paragraph], prefix.Length);
+        else if (prefix is "-" or "*" or "+")
+            format = () => ApplyList([paragraph], NoteLists.Kind.Bullets);
+        else if (prefix.Length is >= 2 and <= 10 && prefix[^1] is '.' or ')' &&
+                 prefix[..^1].All(char.IsAsciiDigit) && int.TryParse(prefix[..^1], out var start) && start > 0)
+            format = () => ApplyList([paragraph], NoteLists.Kind.Numbers, start);
         else if (prefix is "[]" or "[ ]" or "[x]" or "- [ ]" or "- [x]")
-            format = () => InsertTask(paragraph, prefix.Contains('x'));
+            format = () =>
+            {
+                ApplyList([paragraph], NoteLists.Kind.Tasks);
+                ((CheckBox)NoteLists.TaskOf(paragraph).Child).IsChecked = prefix.Contains('x');
+            };
         else if (prefix == ">")
             format = () => WrapQuote(paragraph);
         else if (prefix == Backtick + Backtick + Backtick)
             format = () => SetCodeBlock(paragraph, "");
         else return false;
 
-        ApplyAfterInput(paragraph.ContentStart, end, marker =>
+        ApplyAfterInput(NoteLists.TextStart(paragraph), end, (marker, atTrigger) =>
         {
             marker.Text = "";
-            CaretPosition = paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+            var selection = atTrigger ? null : SaveSelection();
             format();
+            if (selection == null) CaretPosition = NoteLists.TextStart(paragraph);
+            else RestoreSelection(selection);
         });
         return true;
     }
 
-    private void ApplyAfterInput(TextPointer start, TextPointer end, Action<TextRange> apply)
+    private void ApplyAfterInput(TextPointer start, TextPointer end, Action<TextRange, bool> apply)
     {
         var document = Document;
         start = start.GetPositionAtOffset(0, LogicalDirection.Forward);
@@ -211,68 +221,43 @@ internal sealed class NoteEditor : RichTextBox
 
         // WPF batches keystrokes. Wait for the native edit to finish, and keep
         // this range anchored before any characters typed after the shortcut.
-        Dispatcher.InvokeAsync(() =>
+        markdownEdits.Enqueue(() =>
         {
             if (IsReadOnly || !ReferenceEquals(Document, document) || start.CompareTo(end) >= 0) return;
             var range = new TextRange(start, end);
             if (range.Text != original) return;
             var caretAtTrigger = Selection.IsEmpty && CaretPosition.CompareTo(end) == 0;
-            var selectionStart = Selection.Start.GetPositionAtOffset(0, LogicalDirection.Forward);
-            var selectionEnd = Selection.End.GetPositionAtOffset(0, LogicalDirection.Forward);
-            Change(() =>
-            {
-                apply(range);
-                if (!caretAtTrigger) Selection.Select(selectionStart, selectionEnd);
-            });
-        }, DispatcherPriority.Input);
+            Change(() => apply(range, caretAtTrigger));
+        });
+        markdownCommit ??= Dispatcher.InvokeAsync(CommitMarkdown, DispatcherPriority.Input);
     }
 
-    private void InsertTask(Paragraph paragraph, bool isChecked)
+    private void CommitTyping()
     {
-        var marker = TaskMarker(isChecked);
-        if (paragraph.Inlines.FirstInline is { } first) paragraph.Inlines.InsertBefore(first, marker);
-        else paragraph.Inlines.Add(marker);
-        if (paragraph.Parent is ListItem { Parent: List list } && list.ListItems.All(item =>
-                item.Blocks.FirstBlock is Paragraph line && line.Inlines.OfType<InlineUIContainer>().Any(inline => inline.Child is CheckBox)))
+        if (typingPending)
         {
-            list.MarkerStyle = TextMarkerStyle.None;
-            list.Padding = new Thickness(0);
+            // Let the native text input queued before this command commit.
+            typingPending = false;
+            Dispatcher.Invoke(static () => { }, DispatcherPriority.Background);
         }
-        if (Selection.IsEmpty) CaretPosition = marker.ElementEnd.GetInsertionPosition(LogicalDirection.Forward);
+        CommitMarkdown();
+    }
+
+    private void CommitMarkdown()
+    {
+        markdownCommit?.Abort();
+        markdownCommit = null;
+        while (markdownEdits.TryDequeue(out var edit)) edit();
     }
 
     private void WrapQuote(Paragraph paragraph)
     {
-        var blocks = ContainingBlocks(paragraph);
+        var blocks = NoteLists.BlocksOf(paragraph);
         var quote = Quote();
         blocks.InsertBefore(paragraph, quote);
         blocks.Remove(paragraph);
         quote.Blocks.Add(paragraph);
         CaretPosition = paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
-    }
-
-    protected override void OnPreviewKeyDown(KeyEventArgs e)
-    {
-        base.OnPreviewKeyDown(e);
-        if (e.Handled || IsReadOnly || e.Key != Key.Enter || e.KeyboardDevice.Modifiers != ModifierKeys.None ||
-            !Selection.IsEmpty || CaretPosition.Paragraph is not { } paragraph) return;
-
-        if (paragraph.Tag is CodeBlockInfo)
-        {
-            EditingCommands.EnterLineBreak.Execute(null, this);
-            e.Handled = true;
-        }
-        else if (HeadingLevel(paragraph) > 0 &&
-                 new TextRange(CaretPosition, paragraph.ContentEnd).Text.Length == 0)
-        {
-            Change(() =>
-            {
-                var next = CaretPosition.InsertParagraphBreak();
-                SetHeading(next.Paragraph, 0);
-                CaretPosition = next;
-            });
-            e.Handled = true;
-        }
     }
 
     private void Paste(object sender, DataObjectPastingEventArgs e)
@@ -293,18 +278,32 @@ internal sealed class NoteEditor : RichTextBox
         if (!Selection.IsEmpty) Selection.Text = "";
         var caret = CaretPosition;
         var paragraph = caret.Paragraph;
-        if (fragment.Blocks.Count == 1 && fragment.Blocks.FirstBlock is Paragraph source && source.Tag == null)
+        if (fragment.Blocks.Count == 1 && fragment.Blocks.FirstBlock is Paragraph source && FormatOf(source) == null)
         {
             InsertInlines(source, caret);
             return;
         }
 
-        var before = new TextRange(paragraph.ContentStart, caret).Text.Length > 0;
-        var after = new TextRange(caret, paragraph.ContentEnd).Text.Length > 0;
-        var replace = !before && !after && paragraph.Tag == null && !paragraph.Inlines.OfType<InlineUIContainer>().Any();
+        var before = NoteLists.InlineText(paragraph.ContentStart, caret).Length > 0;
+        var after = NoteLists.InlineText(caret, paragraph.ContentEnd).Length > 0;
+        if (!after && paragraph.Parent is ListItem { Parent: List list } item && item.Blocks.FirstBlock == paragraph &&
+            fragment.Blocks.Count == 1 && fragment.Blocks.FirstBlock is List pasted && NoteLists.KindOf(pasted) == NoteLists.KindOf(list))
+        {
+            var lastItem = item;
+            foreach (var row in pasted.ListItems.ToArray())
+            {
+                pasted.ListItems.Remove(row);
+                list.ListItems.InsertAfter(lastItem, row);
+                lastItem = row;
+            }
+            if (!before && item.Blocks.Count == 1) list.ListItems.Remove(item);
+            CaretPosition = lastItem.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+            return;
+        }
+        var replace = !before && !after && FormatOf(paragraph) == null && NoteLists.TaskOf(paragraph) == null;
         var anchor = before && after ? caret.InsertParagraphBreak().Paragraph
             : before ? paragraph.NextBlock : paragraph;
-        var blocks = ContainingBlocks(anchor ?? paragraph);
+        var blocks = NoteLists.BlocksOf(anchor ?? paragraph);
         Block last = null;
         foreach (var block in fragment.Blocks.ToArray())
         {
@@ -328,15 +327,6 @@ internal sealed class NoteEditor : RichTextBox
         CaretPosition = span.ElementEnd.GetInsertionPosition(LogicalDirection.Forward);
     }
 
-    private static BlockCollection ContainingBlocks(Block block) => block.Parent switch
-    {
-        FlowDocument document => document.Blocks,
-        Section section => section.Blocks,
-        ListItem item => item.Blocks,
-        TableCell cell => cell.Blocks,
-        _ => throw new InvalidOperationException("Unsupported note block container.")
-    };
-
     private static TextPointer MoveBackByText(TextPointer point, int length)
     {
         while (length > 0 && point != null)
@@ -349,16 +339,26 @@ internal sealed class NoteEditor : RichTextBox
         return point;
     }
 
-    private void Change(Action action)
+    private void Change(Action action, bool preserveSelection = false)
     {
+        var selection = preserveSelection ? SaveSelection() : null;
         BeginChange();
-        changingDocument = true;
-        try { action(); }
+        changeDepth++;
+        try
+        {
+            action();
+            if (changeDepth == 1)
+            {
+                selection ??= SaveSelection();
+                NoteLists.Normalize(Document);
+            }
+            if (selection != null) RestoreSelection(selection);
+        }
         finally
         {
             EndChange();
-            changingDocument = false;
+            changeDepth--;
         }
-        DocumentEdited?.Invoke();
+        if (changeDepth == 0) DocumentEdited?.Invoke();
     }
 }

@@ -147,14 +147,14 @@ public sealed class Window2 : Window
             toolbar.Children.Add(button);
         }
 
-        Add("H", "标题 / 正文", editor.ToggleHeading);
+        Add("H", "标题 / 正文（Ctrl+Alt+1–6 / Ctrl+Alt+0）", editor.ToggleHeading);
         Add("B", "粗体（Ctrl+B）", () => editor.ToggleMark(InlineStyle.Bold), InlineStyle.Bold);
         Add("I", "斜体（Ctrl+I）", () => editor.ToggleMark(InlineStyle.Italic), InlineStyle.Italic);
-        Add("U", "下划线", () => editor.ToggleMark(InlineStyle.Underline), InlineStyle.Underline);
-        Add("S", "删除线", () => editor.ToggleMark(InlineStyle.Strike), InlineStyle.Strike);
-        Add("•≡", "项目符号列表", () => editor.ToggleList(false));
-        Add("1.", "编号列表", () => editor.ToggleList(true));
-        Add("☑", "待办事项", editor.ToggleTask);
+        Add("U", "下划线（Ctrl+U）", () => editor.ToggleMark(InlineStyle.Underline), InlineStyle.Underline);
+        Add("S", "删除线（Ctrl+Shift+X）", () => editor.ToggleMark(InlineStyle.Strike), InlineStyle.Strike);
+        Add("•≡", "项目符号列表（Ctrl+Shift+8）", () => editor.ToggleList(false));
+        Add("1.", "编号列表（Ctrl+Shift+7）", () => editor.ToggleList(true));
+        Add("☑", "待办事项（Ctrl+Shift+9）", editor.ToggleTask);
         Add("</>", "行内代码", () => editor.ToggleMark(InlineStyle.Code));
         return toolbar;
     }

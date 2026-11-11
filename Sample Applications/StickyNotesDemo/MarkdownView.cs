@@ -17,6 +17,9 @@ public static class MarkdownView
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UsePipeTables().UseTaskLists()
         .UseEmphasisExtras().UsePreciseSourceLocation().Build();
     private static readonly double[] HeadingSizes = [26, 22, 19, 17, 15, 14];
+    private static readonly DependencyProperty ParagraphFormatProperty = DependencyProperty.RegisterAttached(
+        "ParagraphFormat", typeof(object), typeof(MarkdownView),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsMeasure));
     internal static readonly FontFamily CodeFont = new("Consolas");
     internal static readonly Brush InlineCodeBackground = new SolidColorBrush(Color.FromArgb(18, 0, 0, 0));
     internal sealed record CodeBlockInfo(string Language);
@@ -68,21 +71,26 @@ public static class MarkdownView
             ColumnWidth=double.PositiveInfinity };
         foreach (var block in markdown) document.Blocks.Add(RenderBlock(block));
         if (document.Blocks.Count == 0) document.Blocks.Add(Paragraph(null));
+        NoteLists.Normalize(document);
         return document;
     }
 
-    internal static int HeadingLevel(Paragraph paragraph) => paragraph.Tag is int level ? level : 0;
+    internal static object FormatOf(Paragraph paragraph) => paragraph.GetValue(ParagraphFormatProperty);
+    internal static int HeadingLevel(Paragraph paragraph) => FormatOf(paragraph) is int level ? level : 0;
 
     internal static void SetHeading(Paragraph paragraph, int level)
     {
-        paragraph.Tag = level == 0 ? null : level;
+        // Store the block role in the text tree so WPF undoes it along with
+        // changes to the paragraph's font and text.
         if (level == 0)
         {
+            paragraph.ClearValue(ParagraphFormatProperty);
             paragraph.ClearValue(TextElement.FontSizeProperty);
             paragraph.ClearValue(TextElement.FontWeightProperty);
         }
         else
         {
+            paragraph.SetValue(ParagraphFormatProperty, level);
             paragraph.FontSize = HeadingSizes[level - 1];
             paragraph.FontWeight = FontWeights.SemiBold;
         }
@@ -90,7 +98,7 @@ public static class MarkdownView
 
     internal static void SetCodeBlock(Paragraph paragraph, string language)
     {
-        paragraph.Tag = new CodeBlockInfo(language ?? "");
+        paragraph.SetValue(ParagraphFormatProperty, new CodeBlockInfo(language ?? ""));
         paragraph.FontFamily = CodeFont;
         paragraph.FontSize = 12;
         paragraph.Background = new SolidColorBrush(Color.FromArgb(14, 0, 0, 0));
@@ -107,7 +115,8 @@ public static class MarkdownView
 
     internal static InlineUIContainer TaskMarker(bool isChecked) => new(new CheckBox
     {
-        IsChecked = isChecked, Focusable = false, Margin = new Thickness(0, 0, 5, 0),
+        IsChecked = isChecked, Focusable = false, Width = NoteLists.TaskWidth,
+        Margin = new Thickness(0, 0, NoteLists.TaskGap, 0),
         ToolTip = "标记待办状态", VerticalAlignment = VerticalAlignment.Center
     }) { BaselineAlignment = BaselineAlignment.Center };
 
@@ -129,14 +138,7 @@ public static class MarkdownView
                 foreach (var child in quote) section.Blocks.Add(RenderBlock(child));
                 return section;
             case ListBlock list:
-                var taskList = list.All(item => item is ListItemBlock row && row.FirstOrDefault() is ParagraphBlock first &&
-                    first.Inline?.FirstChild is TaskList);
-                var items = new System.Windows.Documents.List
-                {
-                    MarkerStyle = taskList ? TextMarkerStyle.None : list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
-                    Padding = taskList ? new Thickness(0) : new Thickness(22, 0, 0, 0),
-                    Margin = new Thickness(0, 0, 0, 8)
-                };
+                var items = NoteLists.Create(list.IsOrdered ? NoteLists.Kind.Numbers : NoteLists.Kind.Bullets);
                 if (list.IsOrdered && int.TryParse(list.OrderedStart, out var start) && start > 0) items.StartIndex = start;
                 foreach (ListItemBlock item in list)
                 {
@@ -146,7 +148,9 @@ public static class MarkdownView
                 }
                 return items;
             case ThematicBreakBlock:
-                return new Paragraph { Tag = BlockStyle.Divider, BorderBrush=new SolidColorBrush(Color.FromArgb(45,0,0,0)), BorderThickness=new Thickness(0,1,0,0), Margin=new Thickness(0,8,0,8) };
+                var divider = new Paragraph { BorderBrush=new SolidColorBrush(Color.FromArgb(45,0,0,0)), BorderThickness=new Thickness(0,1,0,0), Margin=new Thickness(0,8,0,8) };
+                divider.SetValue(ParagraphFormatProperty, BlockStyle.Divider);
+                return divider;
             case Markdig.Extensions.Tables.Table table:
                 var output = new System.Windows.Documents.Table { CellSpacing=0, Margin=new Thickness(0,4,0,10) };
                 var group = new TableRowGroup(); output.RowGroups.Add(group);
@@ -170,7 +174,7 @@ public static class MarkdownView
     }
     private static Paragraph Paragraph(ContainerInline inline)
     {
-        var paragraph = new Paragraph { Margin=new Thickness(0,0,0,8) };
+        var paragraph = new Paragraph();
         if (inline != null) AddInlines(paragraph.Inlines, inline);
         return paragraph;
     }

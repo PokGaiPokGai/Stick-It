@@ -23,27 +23,41 @@ internal static class MarkdownWriter
     }
 
     private static string WriteBlocks(BlockCollection blocks, bool insideList = false)
-        => string.Join("\n\n", blocks.Select(block => WriteBlock(block, insideList)));
+    {
+        var output = new List<string>();
+        var previousDelimiter = ' ';
+        foreach (var block in blocks)
+        {
+            // CommonMark joins adjacent ordered lists with the same delimiter.
+            // Use the other delimiter when the editor has a separate start.
+            var delimiter = previousDelimiter == '.' ? ')' : '.';
+            output.Add(WriteBlock(block, insideList, delimiter));
+            previousDelimiter = block is List { MarkerStyle: TextMarkerStyle.Decimal } ? delimiter : ' ';
+        }
+        return string.Join("\n\n", output);
+    }
 
-    private static string WriteBlock(Block block, bool insideList)
+    private static string WriteBlock(Block block, bool insideList, char orderedDelimiter)
     {
         switch (block)
         {
             case Paragraph paragraph:
-                if (paragraph.Tag is CodeBlockInfo code)
+                if (FormatOf(paragraph) is CodeBlockInfo code)
                 {
-                    var value = new TextRange(paragraph.ContentStart, paragraph.ContentEnd).Text.Replace("\r\n", "\n");
+                    var value = NoteLists.InlineText(paragraph.ContentStart, paragraph.ContentEnd).Replace("\r\n", "\n");
                     var fence = CodeFence(value, 3);
                     return fence + code.Language + "\n" + value + "\n" + fence;
                 }
 
                 var text = WriteInlines(paragraph.Inlines);
-                if (paragraph.Tag is BlockStyle.Divider)
+                if (FormatOf(paragraph) is BlockStyle.Divider)
                     return text.Length == 0 ? "---" : "---\n\n" + text;
                 var level = HeadingLevel(paragraph);
                 if (level > 0) return new string('#', level) + " " + text;
                 if (!insideList && (text.StartsWith("[ ] ", StringComparison.Ordinal) || text.StartsWith("[x] ", StringComparison.Ordinal)))
                     return "- " + text;
+                if (text is "[ ] " or "[x] ")
+                    return text + "<br>";
                 return text.Length == 0 ? "<br>" : text;
             case Section section:
                 var children = WriteBlocks(section.Blocks, insideList);
@@ -56,7 +70,7 @@ internal static class MarkdownWriter
                 foreach (var item in list.ListItems)
                 {
                     var prefix = list.MarkerStyle == TextMarkerStyle.Decimal
-                        ? (number++).ToString(CultureInfo.InvariantCulture) + ". "
+                        ? (number++).ToString(CultureInfo.InvariantCulture) + orderedDelimiter + " "
                         : "- ";
                     var lines = WriteBlocks(item.Blocks, insideList: true).Split('\n');
                     var indent = new string(' ', prefix.Length);

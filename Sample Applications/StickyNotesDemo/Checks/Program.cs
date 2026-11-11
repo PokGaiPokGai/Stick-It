@@ -16,7 +16,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using StickyNotesDemo;
 
-internal static class Checks
+internal static partial class Checks
 {
     static void Assert(bool value,string message) { if(!value) throw new Exception(message); Console.WriteLine("PASS "+message); }
     [STAThread] static int Main(string[] args)
@@ -29,7 +29,7 @@ internal static class Checks
             TestSingleInstance(); TestPlacement();
             var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
 
-            TestStore(temp); TestMarkdown(); TestWindows(temp,output);
+            TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output);
             Console.WriteLine("All checks passed. No window, tray icon, hotkey, or desktop input was activated."); return 0;
         } catch(Exception error) { Console.Error.WriteLine(error); return 1; } finally { Directory.Delete(temp,true); }
     }
@@ -280,7 +280,15 @@ internal static class Checks
 
     private sealed class OfflineKeyboard() : KeyboardDevice(InputManager.Current)
     {
-        protected override KeyStates GetKeyStatesFromSystem(Key key) => KeyStates.None;
+        internal ModifierKeys ActiveModifiers { get; set; }
+
+        protected override KeyStates GetKeyStatesFromSystem(Key key) => key switch
+        {
+            Key.LeftCtrl when ActiveModifiers.HasFlag(ModifierKeys.Control) => KeyStates.Down,
+            Key.LeftShift when ActiveModifiers.HasFlag(ModifierKeys.Shift) => KeyStates.Down,
+            Key.LeftAlt when ActiveModifiers.HasFlag(ModifierKeys.Alt) => KeyStates.Down,
+            _ => KeyStates.None
+        };
     }
 
     private sealed class OfflineInputSource : PresentationSource
