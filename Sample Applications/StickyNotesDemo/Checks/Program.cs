@@ -108,6 +108,13 @@ internal static class Checks
         Invoke(note,"BeginEditing"); Invoke(note,"FinishEditing");
         var view=Find<FlowDocumentScrollViewer>((DependencyObject)note.Content);
         Assert(editor.Visibility==Visibility.Collapsed&&view.Visibility==Visibility.Visible&&new TextRange(view.Document.ContentStart,view.Document.ContentEnd).Text.Contains("编辑完成"),"editing finishes into Markdown rendering without mode button");
+        editor.Text="";
+        var hint=(TextBlock)typeof(Window2).GetField("placeholder",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(note);
+        Assert(hint.Visibility==Visibility.Visible,"empty inactive note shows placeholder");
+        Invoke(note,"BeginEditing");
+        Assert(hint.Visibility==Visibility.Collapsed,"placeholder hidden before caret enters empty editor");
+        Invoke(note,"FinishEditing");
+        Assert(hint.Visibility==Visibility.Visible,"empty note restores placeholder after editing");
         var close=new CancelEventArgs(); Invoke(note,"OnClosing",close);
         Assert(close.Cancel&&!data.IsOpen,"closing note hides it and keeps data");
         var libraryClose=new CancelEventArgs(); Invoke(main,"OnClosing",libraryClose);

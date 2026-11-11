@@ -18,6 +18,7 @@ public sealed class Window2 : Window
     private readonly TextBox editor;
     private readonly FlowDocumentScrollViewer rendered;
     private readonly Border paper;
+    private readonly TextBlock placeholder;
     private readonly Button pin;
     private bool disposing;
     private bool editing;
@@ -68,9 +69,8 @@ public sealed class Window2 : Window
         rendered=new FlowDocumentScrollViewer { Document=MarkdownView.Render(data.Markdown), IsToolBarVisible=false,
             VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Padding=new Thickness(0) };
         body.Children.Add(rendered); body.Children.Add(editor);
-        var placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
+        placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
         body.Children.Add(placeholder);
-        void UpdatePlaceholder() => placeholder.Visibility=editor.Text.Length==0 ? Visibility.Visible : Visibility.Collapsed;
         UpdatePlaceholder();
         editor.TextChanged += (_, _) => { Data.Markdown=editor.Text; Data.Modified=DateTime.Now; UpdatePlaceholder(); Changed?.Invoke(); };
         rendered.PreviewMouseLeftButtonDown += (_, e) => {
@@ -113,9 +113,11 @@ public sealed class Window2 : Window
         if (edit) BeginEditing();
         Changed?.Invoke();
     }
+    private void UpdatePlaceholder() => placeholder.Visibility=!editing && editor.Text.Length==0 ? Visibility.Visible : Visibility.Collapsed;
     private void BeginEditing()
     {
         editing=true; rendered.Visibility=Visibility.Collapsed; editor.Visibility=Visibility.Visible;
+        UpdatePlaceholder();
         editor.Focus(); editor.CaretIndex=editor.Text.Length;
     }
     private void FinishEditing()
@@ -123,6 +125,7 @@ public sealed class Window2 : Window
         if (!editing) return;
         editing=false; rendered.Document=MarkdownView.Render(editor.Text);
         editor.Visibility=Visibility.Collapsed; rendered.Visibility=Visibility.Visible;
+        UpdatePlaceholder();
     }
     protected override void OnClosing(CancelEventArgs e)
     {
