@@ -6,9 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -21,7 +19,9 @@ namespace StickyNotesDemo
     public partial class MainWindow : Window
     {
         private DispatcherTimer _alarmTimer;
-        private DispatcherTimer _timerClock;
+        private System.Windows.Forms.NotifyIcon _trayIcon;
+        private System.Windows.Forms.ContextMenuStrip _trayMenu;
+        private System.Drawing.Icon _applicationIcon;
         private string[] _windowContents;
 
         public MainWindow()
@@ -32,15 +32,9 @@ namespace StickyNotesDemo
         public int ArrayPos { get; set; }
         public object[] WindowArray { get; private set; }
 
-        private void WindowLoaded(object sender, RoutedEventArgs e)
+        public void InitializeNotes()
         {
             WindowArray = new object[100];
-
-            _timerClock = new DispatcherTimer
-            {
-                Interval = new TimeSpan(0, 0, 4),
-                IsEnabled = true
-            };
 
             _alarmTimer = new DispatcherTimer
             {
@@ -51,12 +45,47 @@ namespace StickyNotesDemo
 
             var firstRun = !File.Exists("NotesFile");
             LoadNotes();
-            if (firstRun) MainWindow_MouseLeftButtonUp(this, null);
+            if (firstRun) CreateNote();
 
-            ContextMenuService.SetPlacement(AppWindow, PlacementMode.Bottom);
+            using (var stream = Application.GetResourceStream(new Uri("pack://application:,,,/Assets/StickIt.ico")).Stream)
+            using (var icon = new System.Drawing.Icon(stream))
+                _applicationIcon = (System.Drawing.Icon)icon.Clone();
 
-            AppWindow.MouseLeftButtonUp += MainWindow_MouseLeftButtonUp;
-            AppWindow.Closing += MainWindow_Closing;
+            _trayMenu = new System.Windows.Forms.ContextMenuStrip();
+            _trayMenu.Items.Add("新建便签", null, (_, _) => CreateNote());
+            _trayMenu.Items.Add("显示所有便签", null, (_, _) => ShowNotes());
+            _trayMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            _trayMenu.Items.Add("保存并退出", null, (_, _) => Close());
+            _trayIcon = new System.Windows.Forms.NotifyIcon
+            {
+                Text = "Stick It",
+                Icon = _applicationIcon,
+                ContextMenuStrip = _trayMenu,
+                Visible = true
+            };
+            _trayIcon.DoubleClick += (_, _) => ShowNotes();
+            Closing += MainWindow_Closing;
+            Closed += (_, _) =>
+            {
+                _alarmTimer.Stop();
+                _trayIcon.Dispose();
+                _trayMenu.Dispose();
+                _applicationIcon.Dispose();
+            };
+        }
+
+        private void ShowNotes()
+        {
+            var hasNotes = false;
+            foreach (Window2 note in WindowArray)
+            {
+                if (note == null) continue;
+                hasNotes = true;
+                note.Show();
+                note.WindowState = WindowState.Normal;
+                note.Activate();
+            }
+            if (!hasNotes) CreateNote();
         }
 
         private void LoadNotes()
@@ -223,22 +252,9 @@ namespace StickyNotesDemo
             var seconds = (int) double.Parse(token);
 
             tail = index + 1;
-            index = line.IndexOf('-', tail);
-            token = line.Substring(tail, (index - tail));
-            var day = int.Parse(token);
-
-            tail = index + 1;
-            index = line.IndexOf('-', tail);
-            token = line.Substring(tail, (index - tail));
-            var month = int.Parse(token);
-
-            tail = index + 1;
             index = line.IndexOf('|', tail);
-            token = line.Substring(tail, (index - tail));
-            var year = int.Parse(token);
-
-
-            alarmTime = new DateTime(year, month, day, hours, minutes, seconds);
+            var date = DateTime.Parse(line.Substring(tail, index - tail));
+            alarmTime = date.Date.AddHours(hours).AddMinutes(minutes).AddSeconds(seconds);
 
             tail = index + 1;
             index = line.Length;
@@ -310,7 +326,7 @@ namespace StickyNotesDemo
             var mainDataFile = new FileStream("NotesFile", FileMode.OpenOrCreate);
             var writer = new StreamWriter(mainDataFile);
             writer.WriteLine(index + "|" + AppWindow.Top + "|" + AppWindow.Left + "|" +
-                             AppWindow.ActualHeight + "|" + AppWindow.ActualWidth + "|" +
+                             AppWindow.Height + "|" + AppWindow.Width + "|" +
                              AppWindow.Topmost + "|-1" + "|-1" + "|" + DateTime.Now.TimeOfDay +
                              "|" +
                              DateTime.Now.Date.ToShortDateString() + "|null");
@@ -435,7 +451,7 @@ namespace StickyNotesDemo
             }
         }
 
-        private void MainWindow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        private void CreateNote()
         {
             var w2 = new Window2
             {
@@ -496,7 +512,7 @@ namespace StickyNotesDemo
             var mainDataFile = new FileStream("NotesFile", FileMode.Create);
             var writer = new StreamWriter(mainDataFile);
             writer.WriteLine(index + "|" + AppWindow.Top + "|" + AppWindow.Left + "|" +
-                             AppWindow.ActualHeight + "|" + AppWindow.ActualWidth + "|" +
+                             AppWindow.Height + "|" + AppWindow.Width + "|" +
                              AppWindow.Topmost + "|-1" + "|-1" + "|" + DateTime.Now.TimeOfDay +
                              "|" +
                              DateTime.Now.Date.ToShortDateString() + "|null");
@@ -507,23 +523,5 @@ namespace StickyNotesDemo
             writer.Close();
         }
 
-        // Sample event handler:  
-        private void CloseButtonClick(object sender, RoutedEventArgs e)
-        {
-            AppWindow.Close();
-        }
-
-        private void cb_Click(object sender, RoutedEventArgs e)
-        {
-            var cb = sender as CheckBox;
-            AppWindow.Topmost = (cb.IsChecked == true) ? true : false;
-            AppWindow.Focus();
-        }
-
-        private void l_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            cb.IsChecked = !cb.IsChecked;
-            AppWindow.Topmost = (cb.IsChecked == true) ? true : false;
-        }
     }
 }

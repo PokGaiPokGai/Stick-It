@@ -25,6 +25,7 @@ namespace StickyNotesDemo
         {
             Name = "Window2";
             Title = "Stick It";
+            Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/Assets/StickIt.ico"));
             Topmost = TopmostWindow = true;
 
             var lgb = ChangeBackgroundColor(Colors.Yellow);

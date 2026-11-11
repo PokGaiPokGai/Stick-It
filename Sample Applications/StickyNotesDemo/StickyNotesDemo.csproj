@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWpf>true</UseWpf>
@@ -15,6 +15,7 @@
     <AssemblyName>Stick It</AssemblyName>
     <Product>Stick It</Product>
     <Title>Stick It</Title>
+    <ApplicationIcon>Assets\StickIt.ico</ApplicationIcon>
     <FileAlignment>512</FileAlignment>
     <WarningLevel>4</WarningLevel>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -90,5 +91,7 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="alarm3.png" />
+    <Resource Include="Assets\StickIt.ico" />
+    <None Include="Assets\StickIt.png" />
   </ItemGroup>
 </Project>
