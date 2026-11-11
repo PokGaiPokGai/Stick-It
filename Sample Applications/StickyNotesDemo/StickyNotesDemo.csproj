@@ -12,7 +12,9 @@
     <OutputType>WinExe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>StickyNotesDemo</RootNamespace>
-    <AssemblyName>StickyNotesDemo</AssemblyName>
+    <AssemblyName>Stick It</AssemblyName>
+    <Product>Stick It</Product>
+    <Title>Stick It</Title>
     <FileAlignment>512</FileAlignment>
     <WarningLevel>4</WarningLevel>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>

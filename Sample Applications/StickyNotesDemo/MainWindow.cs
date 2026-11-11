@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
@@ -49,7 +49,9 @@ namespace StickyNotesDemo
             };
             _alarmTimer.Tick += AlarmTimer_Tick;
 
+            var firstRun = !File.Exists("NotesFile");
             LoadNotes();
+            if (firstRun) MainWindow_MouseLeftButtonUp(this, null);
 
             ContextMenuService.SetPlacement(AppWindow, PlacementMode.Bottom);
 
@@ -99,7 +101,7 @@ namespace StickyNotesDemo
 
                     var w2 = new Window2
                     {
-                        Title = "Sticky Note",
+                        Title = "Stick It",
                         Tag = ArrayPos,
                         Height = height,
                         Width = width,
@@ -437,7 +439,7 @@ namespace StickyNotesDemo
         {
             var w2 = new Window2
             {
-                Title = "Sticky Note",
+                Title = "Stick It",
                 Tag = ArrayPos
             };
             WindowArray[ArrayPos] = w2;

@@ -24,6 +24,8 @@ namespace StickyNotesDemo
         public Window2()
         {
             Name = "Window2";
+            Title = "Stick It";
+            Topmost = TopmostWindow = true;
 
             var lgb = ChangeBackgroundColor(Colors.Yellow);
             Background = lgb;
@@ -141,6 +143,7 @@ namespace StickyNotesDemo
             };
             m4.Click += m4_Click;
             m4.Name = "AlwaysOnTop";
+            m4.IsChecked = true;
 
             var m5 = new MenuItem
             {

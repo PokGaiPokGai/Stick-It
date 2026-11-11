@@ -1,15 +1,15 @@
-﻿<Window x:Class="StickyNotesDemo.MainWindow"
+<Window x:Class="StickyNotesDemo.MainWindow"
         xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
         xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
         Loaded="WindowLoaded"
         ShowInTaskbar="False"
         WindowStyle="ToolWindow"
         ResizeMode="NoResize"
-        Name="AppWindow"
+        Name="AppWindow" Title="Stick It"
         Height="60"
-        Width="60"
+        Width="120"
         MaxHeight="60"
-        MaxWidth="60"
+        MaxWidth="120"
         Background="Yellow"
         Topmost="True">
     <Window.Resources>
@@ -24,6 +24,6 @@
         </ContextMenu>
     </Window.ContextMenu>
     <StackPanel Background="Yellow">
-        <Label Content="New " Name="TextLabel" />
+        <Label Content="+ New note" Name="TextLabel" />
     </StackPanel>
 </Window>
