@@ -4,7 +4,8 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 
 ## Usage
 
-- One instance per Windows user/session, regardless of the executable's folder. A second launch signals the existing instance to open the library and exits before loading note files.
+- One instance per Windows user/session, regardless of the executable's folder. A second manual launch opens the existing instance's library.
+- A Windows sign-in entry can launch `"D:\Stick It\Stick It.exe" --startup` using the installed executable's path. Stick It starts in the tray and restores the notes that were left open in their saved positions without bringing the library to the foreground.
 - **Shift + Alt + W** creates a new, pinned note centered on the mouse pointer. The position is constrained to that monitor's work area. The shortcut does not repeat while held; registration failures appear in the library.
 - Individual notes never appear on the taskbar. The library has a taskbar entry only while it is open; closing the library hides it, leaving the tray and notes running.
 - Click the tray icon to open the library. Its menu includes new note and save/exit.
@@ -15,7 +16,7 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 - Use **Ctrl + Alt + 1–6** for headings and **Ctrl + Alt + 0** for body text. Enter at the end of a heading starts a body paragraph. Deleting the entire heading text or pressing Backspace at the start of a heading resets that paragraph to body text.
 - Use Markdown shortcuts while typing. For example, type `##` followed by a space for a heading or `**text**` followed by a space for bold. Pasting plain-text Markdown inserts formatted content at the selection.
 - Notes save to Markdown and can reopen with headings, emphasis, lists, task states, quotes, inline and fenced code, links, and tables. Images are represented by their labels.
-- Edits are saved after a 600 ms pause. Notes and open/closed state live in `%LOCALAPPDATA%\Stick It\notes.json`; the previous save is retained as `notes.json.bak`.
+- Edits are saved after a 600 ms pause and when Windows signs out or shuts down. Notes and open/closed state live in `%LOCALAPPDATA%\Stick It\notes.json`; the previous save is retained as `notes.json.bak`.
 - Original sample `NotesFile` data is imported on first launch when no JSON store exists. Text, position and color are imported; original rich-text files are retained unchanged. The old sample's email/alarm demonstration UI is not part of this Markdown version.
 
 ## Upgrading from the original demo / tray preview

@@ -25,6 +25,7 @@ internal sealed partial class NoteEditor : RichTextBox
     private DispatcherOperation markdownCommit;
     private bool typingPending;
     private int changeDepth;
+    private string plainText;
 
     internal NoteEditor(string markdown) : base(Render(markdown))
     {
@@ -42,8 +43,10 @@ internal sealed partial class NoteEditor : RichTextBox
         Resources.MergedDictionaries.Add(TaskStyles);
         TextChanged += (_, e) =>
         {
+            plainText = null;
             typingPending = false;
             if (changeDepth != 0) return;
+            if (e.UndoAction is UndoAction.Undo or UndoAction.Redo) NoteLists.RefreshTaskStyles(Document);
             DocumentEdited?.Invoke();
             QueueMarkdownInput(e);
         };
@@ -57,11 +60,13 @@ internal sealed partial class NoteEditor : RichTextBox
     }
 
     internal event Action DocumentEdited;
-    internal string PlainText => new TextRange(Document.ContentStart, Document.ContentEnd).Text.TrimEnd('\r', '\n');
+    internal string PlainText => plainText ??= new TextRange(Document.ContentStart, Document.ContentEnd).Text.TrimEnd('\r', '\n');
     internal string Markdown => MarkdownWriter.Write(Document);
 
     private void TaskChanged(object sender, RoutedEventArgs e)
     {
+        if (e.OriginalSource is CheckBox { Parent: InlineUIContainer marker } && marker.ContentStart.Paragraph is { } paragraph)
+            NoteLists.RefreshTaskStyle(paragraph);
         if (changeDepth == 0) DocumentEdited?.Invoke();
     }
 
@@ -232,13 +237,28 @@ internal sealed partial class NoteEditor : RichTextBox
     {
         if (!Selection.IsEmpty) Selection.Text = "";
         var caret = CaretPosition;
-        var paragraph = caret.Paragraph;
+        if (caret.Paragraph == null)
+        {
+            // A WPF caret can sit at a table boundary without a paragraph.
+            if (Document.Blocks.Count == 0)
+            {
+                var empty = new Paragraph();
+                Document.Blocks.Add(empty);
+                caret = empty.ContentStart;
+            }
+            else
+                caret = caret.InsertParagraphBreak();
+        }
         if (fragment.Blocks.Count == 1 && fragment.Blocks.FirstBlock is Paragraph source && FormatOf(source) == null)
         {
             InsertInlines(source, caret);
             return;
         }
 
+        // WPF cannot split a paragraph at a position inside a hyperlink.
+        if (ContainingHyperlink(caret) is { } link)
+            caret = HyperlinkBoundary(caret, link);
+        var paragraph = caret.Paragraph;
         var before = NoteLists.InlineText(paragraph.ContentStart, caret).Length > 0;
         var after = NoteLists.InlineText(caret, paragraph.ContentEnd).Length > 0;
         if (!after && paragraph.Parent is ListItem { Parent: List list } item && item.Blocks.FirstBlock == paragraph &&
@@ -273,6 +293,8 @@ internal sealed partial class NoteEditor : RichTextBox
 
     private void InsertInlines(Paragraph source, TextPointer caret)
     {
+        if (ContainingHyperlink(caret) is { } link && HasHyperlink(source.Inlines))
+            caret = HyperlinkBoundary(caret, link);
         var span = new Span((Inline)null, caret);
         foreach (var inline in source.Inlines.ToArray())
         {
@@ -281,6 +303,20 @@ internal sealed partial class NoteEditor : RichTextBox
         }
         CaretPosition = span.ElementEnd.GetInsertionPosition(LogicalDirection.Forward);
     }
+
+    private static Hyperlink ContainingHyperlink(TextPointer caret)
+    {
+        for (var inline = caret.Parent as Inline; inline != null; inline = inline.Parent as Inline)
+            if (inline is Hyperlink link) return link;
+        return null;
+    }
+
+    private static TextPointer HyperlinkBoundary(TextPointer caret, Hyperlink link)
+        => caret.CompareTo(link.ContentStart.GetInsertionPosition(LogicalDirection.Forward)) <= 0
+            ? link.ElementStart : link.ElementEnd;
+
+    private static bool HasHyperlink(InlineCollection inlines)
+        => inlines.Any(inline => inline is Hyperlink || inline is Span span && HasHyperlink(span.Inlines));
 
     private static TextPointer MoveBackByText(TextPointer point, int length)
     {

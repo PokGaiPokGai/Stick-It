@@ -18,12 +18,11 @@
                             <Setter TargetName="Highlight" Property="Background" Value="#12000000" />
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Highlight" Property="Background" Value="#365D50" />
+                            <Setter TargetName="Highlight" Property="Background" Value="#383838" />
                             <Setter Property="Foreground" Value="White" />
                         </Trigger>
                         <Trigger Property="IsChecked" Value="{x:Null}">
-                            <Setter TargetName="Highlight" Property="BorderBrush" Value="#5D796C" />
-                            <Setter Property="Foreground" Value="#2C5144" />
+                            <Setter TargetName="Highlight" Property="BorderBrush" Value="#707070" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

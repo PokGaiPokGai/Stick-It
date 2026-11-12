@@ -69,6 +69,7 @@ public static class MarkdownView
         var document = new FlowDocument { FontFamily=new FontFamily("Segoe UI, Microsoft YaHei UI"), FontSize=14,
             Foreground=new SolidColorBrush(Color.FromRgb(38,38,38)), PagePadding=new Thickness(0),
             ColumnWidth=double.PositiveInfinity };
+        document.Resources.Add(typeof(Paragraph), NoteLists.TaskParagraphStyle);
         foreach (var block in markdown) document.Blocks.Add(RenderBlock(block));
         if (document.Blocks.Count == 0) document.Blocks.Add(Paragraph(null));
         NoteLists.Normalize(document);
@@ -116,7 +117,8 @@ public static class MarkdownView
     internal static InlineUIContainer TaskMarker(bool isChecked) => new(new CheckBox
     {
         IsChecked = isChecked, Focusable = false, Width = NoteLists.TaskWidth,
-        Margin = new Thickness(0, 0, NoteLists.TaskGap, 0),
+        // Keep the checkbox in the list gutter so paragraph decoration starts at the label.
+        Margin = new Thickness(-(NoteLists.TaskWidth + NoteLists.TaskGap), 0, NoteLists.TaskGap, 0),
         ToolTip = "标记待办状态", VerticalAlignment = VerticalAlignment.Center
     }) { BaselineAlignment = BaselineAlignment.Center };
 

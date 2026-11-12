@@ -106,7 +106,7 @@ internal static partial class Checks
         note.Key(Key.Enter);
         Assert(heading.IsChecked == false, "leaving a heading updates the toolbar for the new body paragraph");
 
-        note = new EditorSession("- <em><strong>粗体斜体</strong> 与普通斜体</em>\n- <em>第二个项目</em>");
+        note = new EditorSession("- [ ] <em><strong>整理参考</strong> 并补充说明</em>\n- [x] <em>已保存便签</em>");
         bar = FormattingBar(note.Window);
         note.Select(note.Row(0), note.Row(0, 1));
         DrainFormatting();
@@ -114,14 +114,21 @@ internal static partial class Checks
         var inactive = FindFormatButton(bar, "标题");
         var mixed = FindFormatButton(bar, "粗体");
         var active = FindFormatButton(bar, "斜体");
-        var activeList = FindFormatButton(bar, "项目符号");
-        Assert(mixed.IsChecked == null && active.IsChecked == true && activeList.IsChecked == true,
+        var activeTasks = FindFormatButton(bar, "待办");
+        Assert(mixed.IsChecked == null && active.IsChecked == true && activeTasks.IsChecked == true,
                "toolbar shows partial inline, full inline and block styles together");
         Assert(Highlight(active).Background is SolidColorBrush { Color.A: 255 } &&
                Highlight(mixed).BorderBrush is SolidColorBrush { Color.A: 255 } &&
                Highlight(mixed).Background is SolidColorBrush { Color.A: 0 } &&
                Highlight(inactive).BorderBrush is SolidColorBrush { Color.A: 0 },
                "offscreen WPF template draws different active, mixed and inactive states");
+        var uncheckedTask = (CheckBox)note.Row(0).Inlines.OfType<InlineUIContainer>().Single().Child;
+        var checkedTask = (CheckBox)note.Row(0, 1).Inlines.OfType<InlineUIContainer>().Single().Child;
+        var uncheckedBox = (Border)uncheckedTask.Template.FindName("Box", uncheckedTask);
+        var checkedBox = (Border)checkedTask.Template.FindName("Box", checkedTask);
+        Assert(IsGray(Highlight(active).Background) && IsGray(Highlight(mixed).BorderBrush) &&
+               IsGray(uncheckedBox.BorderBrush) && IsGray(checkedBox.Background),
+               "format controls and task checkboxes use neutral state colors");
     }
 
     private static UniformGrid FormattingBar(Window2 window)
@@ -134,6 +141,9 @@ internal static partial class Checks
         => (IToggleProvider)new ToggleButtonAutomationPeer(button).GetPattern(PatternInterface.Toggle);
 
     private static Border Highlight(ToggleButton button) => (Border)button.Template.FindName("Highlight", button);
+
+    private static bool IsGray(Brush brush)
+        => brush is SolidColorBrush solid && solid.Color.R == solid.Color.G && solid.Color.G == solid.Color.B;
 
     private static void DrainFormatting() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 }

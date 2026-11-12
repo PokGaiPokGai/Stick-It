@@ -18,6 +18,20 @@ internal static class NoteLists
     private static readonly Thickness BodyMargin = new(0, 0, 0, 8);
     private static readonly Thickness ItemMargin = new(0, 0, 0, 4);
     private static readonly Thickness ListPadding = new(TextInset, 0, 0, 0);
+    private static readonly DependencyProperty TaskCompletedProperty = DependencyProperty.RegisterAttached(
+        "TaskCompleted", typeof(bool), typeof(NoteLists), new PropertyMetadata(false));
+    internal static readonly Style TaskParagraphStyle = new(typeof(Paragraph))
+    {
+        Triggers =
+        {
+            new Trigger
+            {
+                Property = TaskCompletedProperty,
+                Value = true,
+                Setters = { new Setter(Paragraph.TextDecorationsProperty, TextDecorations.Strikethrough) }
+            }
+        }
+    };
 
     internal static Kind KindOf(List list) => list.MarkerStyle switch
     {
@@ -63,6 +77,27 @@ internal static class NoteLists
         {
             RemoveTask(paragraph, markers[0]);
             InsertTask(paragraph, markers[0]);
+        }
+        RefreshTaskStyle(paragraph);
+    }
+
+    internal static void RefreshTaskStyle(Paragraph paragraph)
+    {
+        var completed = paragraph.Inlines.FirstInline is InlineUIContainer { Child: CheckBox { IsChecked: true } };
+        if ((bool)paragraph.GetValue(TaskCompletedProperty) == completed) return;
+        if (completed)
+            paragraph.SetValue(TaskCompletedProperty, true);
+        else
+            paragraph.ClearValue(TaskCompletedProperty);
+    }
+
+    internal static void RefreshTaskStyles(FlowDocument document)
+    {
+        for (var point = document.ContentStart; point != null; point = point.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            if (point.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.ElementStart &&
+                point.GetAdjacentElement(LogicalDirection.Forward) is Paragraph paragraph)
+                RefreshTaskStyle(paragraph);
         }
     }
 
@@ -297,7 +332,7 @@ internal static class NoteLists
                                TaskOf(paragraph) != null;
                     if (!task) SetTask(paragraph, false);
                     if (inList || paragraph.TextIndent < 0)
-                        paragraph.TextIndent = task ? -(TaskWidth + TaskGap) : 0;
+                        paragraph.TextIndent = 0;
                     break;
                 case Section section:
                     NormalizeBlocks(section.Blocks, inList);

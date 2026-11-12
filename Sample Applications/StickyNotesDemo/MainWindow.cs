@@ -31,9 +31,9 @@ public partial class MainWindow : Window
         saveTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(600) };
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
     }
-    public void Start()
+    public void Start(bool atSignIn = false)
     {
-        foreach (var data in store.Load()) AddNote(data);
+        var openNotes = LoadNotesToRestore();
         trayArtwork = LoadTrayArtwork();
         trayMenu=new System.Windows.Forms.ContextMenuStrip();
         trayMenu.Items.Add("打开便签列表",null,(_,_)=>ShowLibrary());
@@ -42,10 +42,17 @@ public partial class MainWindow : Window
         trayMenu.Items.Add("保存并退出",null,(_,_)=>ExitApp());
         tray=new System.Windows.Forms.NotifyIcon { Text="Stick It", Icon=trayArtwork, ContextMenuStrip=trayMenu, Visible=true };
         tray.MouseClick += (_,e)=> { if(e.Button==System.Windows.Forms.MouseButtons.Left) ShowLibrary(); };
-        ShowLibrary();
-        foreach (var note in notes.Where(n=>n.Data.IsOpen)) note.Open();
-        RefreshList();
+        if (atSignIn)
+        {
+            ShowInTaskbar = false;
+            new WindowInteropHelper(this).EnsureHandle();
+        }
+        else ShowLibrary();
+        foreach (var note in openNotes) note.Open(activate: !atSignIn);
     }
+
+    private Window2[] LoadNotesToRestore() =>
+        store.Load().Select(AddNote).Where(note => note.Data.IsOpen).ToArray();
 
     private static System.Drawing.Icon LoadTrayArtwork()
     {
@@ -71,7 +78,8 @@ public partial class MainWindow : Window
     private Window2 AddNote(NoteData data)
     {
         var note=new Window2(data); notes.Add(note);
-        note.Changed+=OnNoteChanged;
+        note.Changed+=QueueSave;
+        note.CardChanged+=RefreshVisibleList;
         note.DeleteRequested+=()=>DeleteNote(note);
         return note;
     }
@@ -80,19 +88,29 @@ public partial class MainWindow : Window
         var note=AddNote(new NoteData());
         DesktopIntegration.PlaceAtCursor(note);
         note.Open(edit:true);
-        OnNoteChanged();
+        OnNotesChanged();
     }
-    private void OnNoteChanged()
+    private void OnNotesChanged()
+    {
+        QueueSave();
+        RefreshVisibleList();
+    }
+    private void QueueSave()
     {
         if(exiting) return;
-        RefreshList(); saveTimer.Stop(); saveTimer.Start();
+        saveTimer.Stop(); saveTimer.Start();
+    }
+    private void RefreshVisibleList()
+    {
+        if(!exiting && IsVisible) RefreshList();
     }
     public void ShowLibrary() { ShowInTaskbar=true; Show(); WindowState=WindowState.Normal; Activate(); RefreshList(); }
     private void RefreshList()
     {
         if(NoteList==null) return;
         var query=SearchBox.Text.Trim();
-        var rows=notes.Where(n=>n.PlainText.Contains(query,StringComparison.CurrentCultureIgnoreCase))
+        var matches = query.Length == 0 ? notes : notes.Where(note => note.PlainText.Contains(query, StringComparison.CurrentCultureIgnoreCase));
+        var rows=matches
             .OrderByDescending(n=>n.Data.Modified).Select(n=>new NoteCard(n)).ToArray();
         NoteList.ItemsSource=rows;
         SearchHint.Visibility=query.Length==0 ? Visibility.Visible : Visibility.Collapsed;
@@ -109,18 +127,30 @@ public partial class MainWindow : Window
     private void DeleteNote(Window2 note)
     {
         if(MessageBox.Show("删除这张便签？", "Stick It", MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes) return;
-        notes.Remove(note); note.DisposeWindow(); OnNoteChanged();
+        notes.Remove(note); note.DisposeWindow(); OnNotesChanged();
     }
     private void ExitApp()
     {
         saveTimer.Stop();
         if(!Save()) { ShowLibrary(); return; }
-        exiting=true;
-        if(hotkeyRegistered) DesktopIntegration.UnregisterHotKey(source.Handle,DesktopIntegration.HotkeyId);
+        PrepareForShutdown();
+        Application.Current.Shutdown();
+    }
+    internal void EndSession()
+    {
+        Save();
+        PrepareForShutdown();
+    }
+    internal void PrepareForShutdown()
+    {
+        exiting = true;
+        saveTimer.Stop();
+        foreach (var note in notes) note.PrepareForShutdown();
+        if (hotkeyRegistered) DesktopIntegration.UnregisterHotKey(source.Handle, DesktopIntegration.HotkeyId);
         source?.RemoveHook(WindowMessage);
-        tray.Dispose(); trayMenu.Dispose(); trayArtwork.Dispose();
-        foreach(var note in notes) note.DisposeWindow();
-        Close(); Application.Current.Shutdown();
+        tray?.Dispose();
+        trayMenu?.Dispose();
+        trayArtwork?.Dispose();
     }
     protected override void OnClosing(CancelEventArgs e)
     {
@@ -140,6 +170,8 @@ public partial class MainWindow : Window
 
 public sealed class NoteCard
 {
+    private const int TitleLimit = 160;
+    private const int BodyLimit = 512;
     public Window2 Note { get; }
     public Brush Background=>Note.PaperBrush;
     public string Time=>Note.Data.Modified.ToString("H:mm");
@@ -148,9 +180,16 @@ public sealed class NoteCard
     public NoteCard(Window2 note)
     {
         Note=note;
-        var text=note.PlainText.Trim();
+        var text=note.PlainText.AsSpan().Trim();
         var newline=text.IndexOf('\n');
-        Title=text.Length==0 ? "空白便签" : newline<0 ? text : text.Substring(0,newline).TrimEnd();
-        Body=newline<0 ? "" : text.Substring(newline+1).Trim();
+        Title=text.IsEmpty ? "空白便签" : Preview(newline<0 ? text : text[..newline].TrimEnd(), TitleLimit);
+        Body=newline<0 ? "" : Preview(text[(newline+1)..].Trim(), BodyLimit);
+    }
+
+    private static string Preview(ReadOnlySpan<char> text, int limit)
+    {
+        if (text.Length <= limit) return text.ToString();
+        if (char.IsHighSurrogate(text[limit - 1])) limit--;
+        return string.Concat(text[..limit].TrimEnd(), "…");
     }
 }

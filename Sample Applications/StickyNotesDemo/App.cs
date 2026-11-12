@@ -9,7 +9,8 @@ public partial class App : Application
     private SingleInstance instance;
     protected override void OnStartup(StartupEventArgs e)
     {
-        instance=new SingleInstance(@"Local\StickIt." + WindowsIdentity.GetCurrent().User.Value);
+        var atSignIn = Array.IndexOf(e.Args, "--startup") >= 0;
+        instance=new SingleInstance(@"Local\StickIt." + WindowsIdentity.GetCurrent().User.Value, activateExisting: !atSignIn);
         if (!instance.IsPrimary) { Shutdown(); return; }
         base.OnStartup(e);
         try
@@ -18,13 +19,21 @@ public partial class App : Application
             var controller=new MainWindow(new NoteStore(directory));
             MainWindow=controller;
             instance.Listen(() => Dispatcher.BeginInvoke(new Action(controller.ShowLibrary)));
-            controller.Start();
+            controller.Start(atSignIn);
         }
         catch (Exception error)
         {
+            if (MainWindow is MainWindow controller) controller.PrepareForShutdown();
             MessageBox.Show("Stick It 无法启动，原便签文件未删除。\n" + error.Message, "Stick It", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
     }
+
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        base.OnSessionEnding(e);
+        if (!e.Cancel && MainWindow is MainWindow controller) controller.EndSession();
+    }
+
     protected override void OnExit(ExitEventArgs e) { instance?.Dispose(); base.OnExit(e); }
 }

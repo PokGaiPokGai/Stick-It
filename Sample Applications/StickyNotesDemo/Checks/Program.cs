@@ -21,7 +21,11 @@ internal static partial class Checks
     static void Assert(bool value,string message) { if(!value) throw new Exception(message); Console.WriteLine("PASS "+message); }
     [STAThread] static int Main(string[] args)
     {
-        if(args.Length>0 && args[0]=="contender") { using var other=new SingleInstance(args[1]); return other.IsPrimary ? 9 : 0; }
+        if (args.Length > 0 && args[0] is "contender" or "startup-contender")
+        {
+            using var other = new SingleInstance(args[1], activateExisting: args[0] == "contender");
+            return other.IsPrimary ? 9 : 0;
+        }
         if(args.Length>0 && args[0]=="abandon") { var owner=new SingleInstance(args[1]); Console.WriteLine(owner.IsPrimary?"ready":"failed"); Console.Out.Flush(); Thread.Sleep(30000); return 0; }
         var output=Path.GetFullPath(args[0]); Directory.CreateDirectory(output);
         var temp=Path.Combine(Path.GetTempPath(),"StickIt-check-"+Guid.NewGuid()); Directory.CreateDirectory(temp);
@@ -30,6 +34,10 @@ internal static partial class Checks
             var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
 
             TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
+            TestSessionRestore(temp);
+            TestMarkdownPaste(temp);
+            TestLongNoteMovement(temp);
+            TestTaskCompletion(temp);
             Console.WriteLine("All checks passed. No window, tray icon, hotkey, or desktop input was activated."); return 0;
         } catch(Exception error) { Console.Error.WriteLine(error); return 1; } finally { Directory.Delete(temp,true); }
     }
@@ -44,6 +52,12 @@ internal static partial class Checks
         string name=@"Local\StickIt.Test."+Guid.NewGuid();
         using(var first=new SingleInstance(name)) {
             Assert(first.IsPrimary,"first process owns singleton");
+            using (var activation = EventWaitHandle.OpenExisting(name + ".Activate"))
+            using (var duplicateStartup = Child("startup-contender", name))
+            {
+                Assert(duplicateStartup.WaitForExit(10000) && duplicateStartup.ExitCode == 0 && !activation.WaitOne(0),
+                    "duplicate sign-in launch exits without opening the existing library");
+            }
             using var received=new ManualResetEventSlim(); first.Listen(()=>received.Set());
             var others=Enumerable.Range(0,8).Select(_=>Child("contender",name)).ToArray();
             foreach(var child in others) { Assert(child.WaitForExit(10000)&&child.ExitCode==0,"duplicate process exits without ownership"); child.Dispose(); }
@@ -53,6 +67,37 @@ internal static partial class Checks
         name+= ".Crash";
         using(var crashed=Child("abandon",name)) { Assert(crashed.StandardOutput.ReadLine()=="ready","crash test owns mutex"); crashed.Kill(); crashed.WaitForExit(); }
         using(var recovered=new SingleInstance(name)) Assert(recovered.IsPrimary,"startup recovers after owner process dies");
+    }
+    static void TestSessionRestore(string temp)
+    {
+        var store = new NoteStore(Path.Combine(temp, "session-restore"));
+        var keptOpen = new NoteData { Markdown = "保留在桌面", Left = 340, Top = 140 };
+        var closedAtShutdown = new NoteData { Markdown = "关机前手动收起" };
+        var alreadyClosed = new NoteData { Markdown = "此前已收起", IsOpen = false };
+        store.Save([keptOpen, closedAtShutdown, alreadyClosed]);
+
+        var library = new MainWindow(store);
+        var openNotes = (Window2[])Invoke(library, "LoadNotesToRestore");
+        Assert(openNotes.Select(note => note.Data.Id).SequenceEqual([keptOpen.Id, closedAtShutdown.Id]),
+            "startup selects only the notes recorded as open");
+        openNotes[1].Close();
+        Invoke(library, "EndSession");
+        library.Close();
+        openNotes[0].Close();
+        openNotes[1].Close();
+        Assert(openNotes[0].Data.IsOpen && !openNotes[1].Data.IsOpen,
+            "session shutdown preserves open state while a manual close hides a note");
+
+        var nextLibrary = new MainWindow(store);
+        var nextOpenNotes = (Window2[])Invoke(nextLibrary, "LoadNotesToRestore");
+        var restored = nextOpenNotes.Single();
+        Assert(restored.Data.Id == keptOpen.Id && restored.Data.Markdown == keptOpen.Markdown &&
+               restored.Left == keptOpen.Left && restored.Top == keptOpen.Top && restored.Topmost && !restored.ShowInTaskbar,
+            "next session restores the open note at its saved position as a topmost window");
+        var saved = store.Load();
+        Assert(saved.Count == 3 && !saved.Single(note => note.Id == closedAtShutdown.Id).IsOpen &&
+               !saved.Single(note => note.Id == alreadyClosed.Id).IsOpen,
+            "session ending saves pending visibility changes and retains hidden notes");
     }
     static void TestPlacement()
     {

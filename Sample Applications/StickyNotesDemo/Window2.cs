@@ -26,6 +26,7 @@ public sealed class Window2 : Window
 
     public NoteData Data { get; }
     public event Action Changed;
+    internal event Action CardChanged;
     public event Action DeleteRequested;
     private readonly NoteEditor editor;
     private readonly Border paper;
@@ -71,7 +72,7 @@ public sealed class Window2 : Window
         foreach (var color in new[] { "#FFF7C2", "#E2F1FF", "#F5E0F0", "#E4F2D5", "#EEE8FB", "#F0F0F0" })
         {
             var swatch=new Button { Width=24, Height=24, Margin=new Thickness(3), Background=(Brush)new BrushConverter().ConvertFromString(color), BorderThickness=new Thickness(0), ToolTip=color };
-            swatch.Click += (_, _) => { Data.Color=color; paper.Background=PaperBrush; Data.Modified=DateTime.Now; context.IsOpen=false; Changed?.Invoke(); };
+            swatch.Click += (_, _) => { Data.Color=color; paper.Background=PaperBrush; Data.Modified=DateTime.Now; context.IsOpen=false; NotifyCardChanged(); };
             palette.Children.Add(swatch);
         }
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
@@ -130,7 +131,13 @@ public sealed class Window2 : Window
         Data.Markdown = markdown;
         Data.Modified = DateTime.Now;
         UpdatePlaceholder();
+        NotifyCardChanged();
+    }
+
+    private void NotifyCardChanged()
+    {
         Changed?.Invoke();
+        CardChanged?.Invoke();
     }
 
     private void OpenLink(object sender, RequestNavigateEventArgs e)
@@ -214,9 +221,13 @@ public sealed class Window2 : Window
         hover.Setters.Add(new Setter(BackgroundProperty,new SolidColorBrush(Color.FromArgb(18,0,0,0)))); template.Triggers.Add(hover);
         return template;
     }
-    public void Open(bool edit=false)
+    public void Open(bool edit = false, bool activate = true)
     {
-        Data.IsOpen=true; Show(); WindowState=WindowState.Normal; Activate();
+        Data.IsOpen = true;
+        ShowActivated = activate;
+        Show();
+        WindowState = WindowState.Normal;
+        if (activate) Activate();
         if (edit) { BeginEditing(); editor.Focus(); }
         Changed?.Invoke();
     }
@@ -246,5 +257,6 @@ public sealed class Window2 : Window
         if (!disposing) { e.Cancel=true; FinishEditing(); Data.IsOpen=false; Hide(); Changed?.Invoke(); }
         base.OnClosing(e);
     }
-    public void DisposeWindow() { disposing=true; Close(); }
+    internal void PrepareForShutdown() => disposing = true;
+    public void DisposeWindow() { PrepareForShutdown(); Close(); }
 }

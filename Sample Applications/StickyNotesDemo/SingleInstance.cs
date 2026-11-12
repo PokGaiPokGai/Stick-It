@@ -11,13 +11,13 @@ public sealed class SingleInstance : IDisposable
     private RegisteredWaitHandle listener;
     public bool IsPrimary { get; }
 
-    public SingleInstance(string name)
+    public SingleInstance(string name, bool activateExisting = true)
     {
         activation = new EventWaitHandle(false, EventResetMode.AutoReset, name + ".Activate");
         mutex = new Mutex(false, name + ".Mutex");
         try { IsPrimary = mutex.WaitOne(0); }
         catch (AbandonedMutexException) { IsPrimary = true; }
-        if (!IsPrimary) activation.Set();
+        if (!IsPrimary && activateExisting) activation.Set();
     }
 
     public void Listen(Action onActivate) => listener = ThreadPool.RegisterWaitForSingleObject(
