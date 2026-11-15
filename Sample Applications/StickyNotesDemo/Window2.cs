@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
@@ -121,8 +122,15 @@ public sealed class Window2 : Window
         LocationChanged += (_, _) => { Data.Left=Left; Data.Top=Top; Changed?.Invoke(); };
         SizeChanged += (_, _) => { Data.Width=Width; Data.Height=Height; Changed?.Invoke(); };
     }
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        DesktopIntegration.ConfigureNoteWindow(new WindowInteropHelper(this).Handle);
+    }
+
     public Brush PaperBrush => (Brush)new BrushConverter().ConvertFromString(Data.Color);
     public string PlainText => editor.PlainText;
+    internal FlowDocument CreatePreview() => NotePreview.Create(editor.Document);
 
     private void SaveDocumentChanges()
     {

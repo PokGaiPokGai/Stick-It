@@ -58,12 +58,11 @@
                                     <Border Background="{TemplateBinding Background}" CornerRadius="2"><ContentPresenter/></Border>
                                 </ControlTemplate></Button.Template>
                                 <Grid MinHeight="58">
-                                    <StackPanel Margin="15,23,15,15">
-                                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontSize="14" FontWeight="SemiBold" MaxHeight="40"/>
-                                        <TextBlock Text="{Binding Body}" TextWrapping="Wrap" FontSize="14" MaxHeight="90">
-                                            <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger></Style.Triggers></Style></TextBlock.Style>
-                                        </TextBlock>
-                                    </StackPanel>
+                                    <FlowDocumentScrollViewer Document="{Binding Preview}" Margin="15,23,15,15"
+                                                              MaxHeight="120" VerticalAlignment="Top"
+                                                              IsToolBarVisible="False" IsHitTestVisible="False" Focusable="False"
+                                                              HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Hidden"
+                                                              Background="Transparent" BorderThickness="0" Padding="0"/>
                                     <TextBlock Text="{Binding Time}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,9,0" FontSize="9" Foreground="#555555"/>
                                     <Polygon Points="0,14 0,0 14,0" Width="14" Height="14" Fill="#18000000" HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
                                 </Grid>

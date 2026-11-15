@@ -57,7 +57,8 @@ internal static partial class Checks
                saved.Markdown == longMarkdown, "window movement saves the full note and final coordinates");
 
         var preview = list.Items.OfType<NoteCard>().Single(card => ReferenceEquals(card.Note, note));
-        Assert(preview.Title == "长便签" && preview.Body.Length <= 513 && preview.Body.EndsWith("…", StringComparison.Ordinal),
+        var previewText = new TextRange(preview.Preview.ContentStart, preview.Preview.ContentEnd).Text.TrimEnd();
+        Assert(previewText.StartsWith("长便签", StringComparison.Ordinal) && previewText.Length <= 660 && previewText.EndsWith("…", StringComparison.Ordinal),
                "the library lays out a bounded preview for long notes");
         var search = (TextBox)main.FindName("SearchBox");
         search.Text = searchTerm;
@@ -75,9 +76,9 @@ internal static partial class Checks
                "full-text search reflects edits after caching a long note");
         timer.Stop();
 
-        var oneLine = new Window2(new NoteData { Markdown = new string('字', 159) + "\U0001F600" + new string('字', 500) });
+        var oneLine = new Window2(new NoteData { Markdown = new string('字', 639) + "\U0001F600" + new string('字', 500) });
         var oneLineCard = new NoteCard(oneLine);
-        Assert(oneLineCard.Title == new string('字', 159) + "…" && oneLineCard.Body.Length == 0,
+        Assert(new TextRange(oneLineCard.Preview.ContentStart, oneLineCard.Preview.ContentEnd).Text.TrimEnd() == new string('字', 639) + "…",
                "a long one-line preview truncates without splitting an emoji");
     }
 }

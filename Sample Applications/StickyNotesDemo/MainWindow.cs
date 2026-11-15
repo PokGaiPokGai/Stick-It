@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -170,26 +171,13 @@ public partial class MainWindow : Window
 
 public sealed class NoteCard
 {
-    private const int TitleLimit = 160;
-    private const int BodyLimit = 512;
     public Window2 Note { get; }
     public Brush Background=>Note.PaperBrush;
     public string Time=>Note.Data.Modified.ToString("H:mm");
-    public string Title { get; }
-    public string Body { get; }
+    public FlowDocument Preview { get; }
     public NoteCard(Window2 note)
     {
         Note=note;
-        var text=note.PlainText.AsSpan().Trim();
-        var newline=text.IndexOf('\n');
-        Title=text.IsEmpty ? "空白便签" : Preview(newline<0 ? text : text[..newline].TrimEnd(), TitleLimit);
-        Body=newline<0 ? "" : Preview(text[(newline+1)..].Trim(), BodyLimit);
-    }
-
-    private static string Preview(ReadOnlySpan<char> text, int limit)
-    {
-        if (text.Length <= limit) return text.ToString();
-        if (char.IsHighSurrogate(text[limit - 1])) limit--;
-        return string.Concat(text[..limit].TrimEnd(), "…");
+        Preview = note.CreatePreview();
     }
 }

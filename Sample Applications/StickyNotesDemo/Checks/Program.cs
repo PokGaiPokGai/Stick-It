@@ -38,6 +38,8 @@ internal static partial class Checks
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
             TestTaskCompletion(temp);
+            TestNotePreviews(temp, output);
+            TestNoteWindowStyles();
             Console.WriteLine("All checks passed. No window, tray icon, hotkey, or desktop input was activated."); return 0;
         } catch(Exception error) { Console.Error.WriteLine(error); return 1; } finally { Directory.Delete(temp,true); }
     }

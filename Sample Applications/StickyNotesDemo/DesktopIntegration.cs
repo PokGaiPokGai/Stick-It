@@ -22,6 +22,29 @@ public static class DesktopIntegration
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
     [DllImport("user32.dll", SetLastError=true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
 
+    // Window styles are 32-bit values on both x86 and x64.
+    [DllImport("user32.dll", ExactSpelling=true, SetLastError=true)]
+    private static extern int GetWindowLongW(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll", ExactSpelling=true, SetLastError=true)]
+    private static extern int SetWindowLongW(IntPtr hwnd, int index, int value);
+
+    internal static void ConfigureNoteWindow(IntPtr hwnd)
+    {
+        const int extendedStyle = -20;
+        const int toolWindow = 0x80;
+        const int appWindow = 0x40000;
+        var style = GetWindowLongW(hwnd, extendedStyle);
+        if (style == 0 && Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
+
+        // Keep transparency, topmost and normal click-to-edit activation.
+        if (SetWindowLongW(hwnd, extendedStyle, (style | toolWindow) & ~appWindow) == 0 &&
+            Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
+
+        const uint refreshFrame = 0x20 | 0x1 | 0x2 | 0x4 | 0x10; // FRAMECHANGED, NOSIZE, NOMOVE, NOZORDER, NOACTIVATE
+        if (!SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, refreshFrame)) throw new Win32Exception();
+    }
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern IntPtr FindWindowW(string className, string windowName);
 
