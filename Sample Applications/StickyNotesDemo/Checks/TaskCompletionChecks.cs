@@ -27,12 +27,19 @@ internal static partial class Checks
         Assert(checkbox.DesiredSize.Width == 0 && hit != null &&
                (ReferenceEquals(hit.VisualHit, checkbox) || checkbox.IsAncestorOf(hit.VisualHit)),
                "the checkbox stays clickable in the gutter without consuming text width");
-        var canUndo = note.Editor.CanUndo;
         FormatToggle(checkbox).Toggle();
         DrainFormatting();
         Assert(ShowsTaskStrike(task) && !ShowsTaskStrike(note.Row(0, 1)) && note.Markdown == checkedMarkdown,
                "checking a task strikes its label and saves only the checked marker");
-        Assert(note.Editor.CanUndo == canUndo, "a completion style change does not add a text undo entry");
+        Assert(note.Editor.CanUndo, "toggling completion adds an undoable text-tree change");
+        Invoke(note.Window, "BeginEditing");
+        note.Key(Key.Z, ModifierKeys.Control);
+        Assert(note.Markdown == uncheckedMarkdown && !TaskCheckbox(note.Row(0)).IsChecked.Value && !ShowsTaskStrike(note.Row(0)),
+            "undo restores the unchecked marker, completion style and saved content");
+        note.Key(Key.Z, FormatShortcut);
+        Assert(note.Markdown == checkedMarkdown && TaskCheckbox(note.Row(0)).IsChecked.Value && ShowsTaskStrike(note.Row(0)),
+            "redo restores the completed task");
+        task = note.Row(0);
 
         var store = new NoteStore(Path.Combine(temp, "task-completion"));
         store.Save([note.Window.Data]);
@@ -71,6 +78,18 @@ internal static partial class Checks
         note.Key(Key.Z, FormatShortcut);
         Assert(note.Markdown == "已完成" && !ShowsTaskStrike(note.Body()),
                "redo removes the completion strike with the checkbox");
+
+        note = new EditorSession("- [ ] label");
+        note.End(note.Row(0));
+        note.Type(" extra");
+        FormatToggle(TaskCheckbox(note.Row(0))).Toggle();
+        note.Key(Key.Z, ModifierKeys.Control);
+        Assert(note.Markdown == "- [ ] label extra", "undoing completion leaves the preceding text edit intact");
+        note.Key(Key.Z, ModifierKeys.Control);
+        Assert(note.Markdown == "- [ ] label", "the previous typing operation remains next in undo history");
+        note.Key(Key.Z, FormatShortcut);
+        note.Key(Key.Z, FormatShortcut);
+        Assert(note.Markdown == "- [x] label extra", "typing and completion redo in their original order");
     }
 
     private static bool ShowsTaskStrike(Paragraph paragraph) =>

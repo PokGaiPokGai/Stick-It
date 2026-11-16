@@ -44,6 +44,9 @@ internal static partial class Checks
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
             TestTaskCompletion(temp);
+            TestInternalClipboard();
+            TestReviewLifecycle(temp);
+            TestReadingWheel();
             TestNotePreviews(temp, output);
             TestNoteWindowStyles();
             TestGameMousePolicy();
@@ -367,11 +370,14 @@ internal static partial class Checks
         editor.RaiseEvent(textPaste);
         Assert(textPaste.CommandCancelled && note.Data.Markdown.Contains("<strong>纯文本粘贴</strong>", StringComparison.Ordinal),
                "the WPF plain-text paste route inserts rich content");
-        var copiedNote = new DataObject(DataFormats.UnicodeText, "## 保留原样");
+        editor.SelectAll();
+        var copiedNote = new DataObject(DataFormats.UnicodeText, "纯文本粘贴");
         editor.RaiseEvent(new DataObjectCopyingEventArgs(copiedNote, false));
+        EnterText("");
         var internalPaste = new DataObjectPastingEventArgs(copiedNote, false, DataFormats.UnicodeText);
         editor.RaiseEvent(internalPaste);
-        Assert(!internalPaste.CommandCancelled, "formatted content copied within Stick It keeps the native paste path");
+        Assert(internalPaste.CommandCancelled && note.Data.Markdown.Contains("<strong>纯文本粘贴</strong>", StringComparison.Ordinal),
+            "internal clipboard Markdown preserves selected formatting");
         Invoke(note, "FinishEditing");
     }
 

@@ -32,7 +32,11 @@ public partial class App : Application
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
         base.OnSessionEnding(e);
-        if (!e.Cancel && MainWindow is MainWindow controller) controller.EndSession();
+        if (!e.Cancel && MainWindow is MainWindow controller && !controller.EndSession())
+        {
+            e.Cancel = true;
+            controller.ShowLibrary();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e) { instance?.Dispose(); base.OnExit(e); }

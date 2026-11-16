@@ -17,7 +17,7 @@ namespace StickyNotesDemo;
 internal sealed partial class NoteEditor : RichTextBox
 {
     private const string Backtick = "\u0060";
-    private const string FormattedNoteClipboard = "StickIt.FormattedNote";
+    private const string FormattedNoteClipboard = "StickIt.Markdown";
     private static readonly ResourceDictionary TaskStyles = new()
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/TaskStyles.xaml")
@@ -29,6 +29,7 @@ internal sealed partial class NoteEditor : RichTextBox
     private readonly Queue<Action> markdownEdits = new();
     private DispatcherOperation markdownCommit;
     private bool typingPending;
+    private bool updatingTask;
     private int changeDepth;
     private string plainText;
 
@@ -69,7 +70,8 @@ internal sealed partial class NoteEditor : RichTextBox
             new TextCompositionEventHandler((_, _) => typingPending = !IsReadOnly), handledEventsToo: true);
         AddHandler(ToggleButton.CheckedEvent, new RoutedEventHandler(TaskChanged));
         AddHandler(ToggleButton.UncheckedEvent, new RoutedEventHandler(TaskChanged));
-        DataObject.AddCopyingHandler(this, (_, e) => e.DataObject.SetData(FormattedNoteClipboard, "1", false));
+        DataObject.AddCopyingHandler(this, (_, e) =>
+            e.DataObject.SetData(FormattedNoteClipboard, MarkdownWriter.WriteSelection(Document, Selection), false));
         DataObject.AddPastingHandler(this, Paste);
     }
 
@@ -79,9 +81,24 @@ internal sealed partial class NoteEditor : RichTextBox
 
     private void TaskChanged(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is CheckBox { Parent: InlineUIContainer marker } && marker.ContentStart.Paragraph is { } paragraph)
-            NoteLists.RefreshTaskStyle(paragraph);
-        if (changeDepth == 0) DocumentEdited?.Invoke();
+        if (updatingTask || changeDepth != 0 ||
+            e.OriginalSource is not CheckBox { Parent: InlineUIContainer marker } checkbox ||
+            marker.ContentStart.Paragraph is not { } paragraph) return;
+        updatingTask = true;
+        try
+        {
+            var completed = checkbox.IsChecked == true;
+            // CheckBox state itself is outside WPF's text undo tree. Retain the
+            // old marker's state and replace its text element as one undo unit.
+            checkbox.IsChecked = !completed;
+            Change(() =>
+            {
+                var inlines = marker.Parent is Span span ? span.Inlines : paragraph.Inlines;
+                inlines.InsertBefore(marker, TaskMarker(completed));
+                inlines.Remove(marker);
+            }, preserveSelection: true);
+        }
+        finally { updatingTask = false; }
     }
 
     private IEnumerable<Paragraph> SelectedParagraphs()
@@ -237,7 +254,13 @@ internal sealed partial class NoteEditor : RichTextBox
     private void Paste(object sender, DataObjectPastingEventArgs e)
     {
         var clipboard = e.SourceDataObject;
-        if (e.IsDragDrop || clipboard.GetDataPresent(FormattedNoteClipboard, false)) return;
+        if (e.IsDragDrop) return;
+        if (clipboard.GetData(FormattedNoteClipboard, false) is string markdown)
+        {
+            Change(() => InsertFragment(Render(markdown)));
+            e.CancelCommand();
+            return;
+        }
         var text = clipboard.GetData(DataFormats.UnicodeText) as string ?? clipboard.GetData(DataFormats.Text) as string;
         if (text == null) return;
         var plainText = e.FormatToApply == DataFormats.UnicodeText || e.FormatToApply == DataFormats.Text;

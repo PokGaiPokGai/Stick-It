@@ -21,6 +21,8 @@ public static class DesktopIntegration
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
     [DllImport("user32.dll", SetLastError=true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll", SetLastError=true)] private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromRect(ref Rect rect, uint flags);
 
     // Window styles are 32-bit values on both x86 and x64.
     [DllImport("user32.dll", ExactSpelling=true, SetLastError=true)]
@@ -103,6 +105,35 @@ public static class DesktopIntegration
         var bounds = CenteredBounds(point, info.Work, (int)Math.Round(window.Width*dpiX/96), (int)Math.Round(window.Height*dpiY/96));
         var hwnd = new WindowInteropHelper(window).EnsureHandle();
         if (!SetWindowPos(hwnd, new IntPtr(-1), bounds.Left, bounds.Top, bounds.Right-bounds.Left, bounds.Bottom-bounds.Top, 0x10))
+            throw new Win32Exception();
+    }
+
+    internal static Rect VisibleBounds(Rect bounds, Rect work)
+    {
+        if (bounds.Left < work.Right && bounds.Right > work.Left && bounds.Top < work.Bottom && bounds.Bottom > work.Top)
+            return bounds;
+        var width = bounds.Right - bounds.Left;
+        var height = bounds.Bottom - bounds.Top;
+        return CenteredBounds(new Point { X = bounds.Left + width / 2, Y = bounds.Top + height / 2 }, work, width, height);
+    }
+
+    internal static bool ContainsWheelPoint(IntPtr window, IntPtr position)
+    {
+        if (!GetWindowRect(window, out var bounds)) throw new Win32Exception();
+        var x = unchecked((short)position.ToInt64());
+        var y = unchecked((short)(position.ToInt64() >> 16));
+        return x >= bounds.Left && x < bounds.Right && y >= bounds.Top && y < bounds.Bottom;
+    }
+
+    internal static void EnsureVisible(Window window)
+    {
+        var handle = new WindowInteropHelper(window).EnsureHandle();
+        if (!GetWindowRect(handle, out var bounds)) throw new Win32Exception();
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (!GetMonitorInfo(MonitorFromRect(ref bounds, 2), ref info)) throw new Win32Exception();
+        var visible = VisibleBounds(bounds, info.Work);
+        if (!visible.Equals(bounds) && !SetWindowPos(handle, IntPtr.Zero, visible.Left, visible.Top,
+                visible.Right - visible.Left, visible.Bottom - visible.Top, 0x4 | 0x10)) // NOZORDER | NOACTIVATE
             throw new Win32Exception();
     }
 }

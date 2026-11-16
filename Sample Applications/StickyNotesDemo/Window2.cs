@@ -37,6 +37,7 @@ public sealed class Window2 : Window
     private DispatcherOperation formattingRefresh;
     private bool disposing;
     private bool editing;
+    private int readingWheelDelta;
     internal bool MousePassthrough { get; private set; }
 
     public Window2(NoteData data)
@@ -126,9 +127,50 @@ public sealed class Window2 : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        DesktopIntegration.ConfigureNoteWindow(new WindowInteropHelper(this).Handle);
+        var handle = new WindowInteropHelper(this).Handle;
+        DesktopIntegration.ConfigureNoteWindow(handle);
+        HwndSource.FromHwnd(handle).AddHook(NoteWindowMessage);
         if (MousePassthrough)
             DesktopIntegration.SetNoteMousePassthrough(new WindowInteropHelper(this).Handle, true);
+    }
+
+    private IntPtr NoteWindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // Scroll a hovered reading note without activating its window or
+        // moving keyboard focus into the editor.
+        if (message == 0x020A && !editing && !MousePassthrough && DesktopIntegration.ContainsWheelPoint(hwnd, lParam))
+        {
+            ScrollReadingContent(unchecked((short)(wParam.ToInt64() >> 16)));
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    protected override void OnPreviewMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnPreviewMouseWheel(e);
+        if (e.Handled || editing || MousePassthrough) return;
+        ScrollReadingContent(e.Delta);
+        e.Handled = true;
+    }
+
+    private void ScrollReadingContent(int delta)
+    {
+        readingWheelDelta += delta;
+        var notches = readingWheelDelta / Mouse.MouseWheelDeltaForOneLine;
+        readingWheelDelta %= Mouse.MouseWheelDeltaForOneLine;
+        var lines = SystemParameters.WheelScrollLines;
+        for (var notch = 0; notch < Math.Abs(notches); notch++)
+        {
+            if (lines < 0)
+            {
+                if (notches > 0) editor.PageUp(); else editor.PageDown();
+            }
+            else for (var line = 0; line < lines; line++)
+            {
+                if (notches > 0) editor.LineUp(); else editor.LineDown();
+            }
+        }
     }
 
     internal void SetMousePassthrough(bool enabled)
@@ -262,6 +304,7 @@ public sealed class Window2 : Window
         if (activate) SetMousePassthrough(false);
         Data.IsOpen = true;
         ShowActivated = activate;
+        DesktopIntegration.EnsureVisible(this);
         Show();
         WindowState = WindowState.Normal;
         if (activate) Activate();

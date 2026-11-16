@@ -22,34 +22,55 @@ internal static class MarkdownWriter
         return text == "<br>" ? "" : text;
     }
 
-    private static string WriteBlocks(BlockCollection blocks, bool insideList = false)
+    internal static string WriteSelection(FlowDocument document, TextRange selection)
+    {
+        if (selection.IsEmpty) return "";
+        if (selection.Start.Paragraph is { } paragraph && paragraph == selection.End.Paragraph &&
+            (selection.Start.CompareTo(paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward)) > 0 ||
+             selection.End.CompareTo(paragraph.ContentEnd.GetInsertionPosition(LogicalDirection.Backward)) < 0))
+            return WriteInlines(paragraph.Inlines, selection: selection);
+        return WriteBlocks(document.Blocks, selection: selection);
+    }
+
+    private static bool Included(TextElement element, TextRange selection) => selection == null ||
+        selection.Start.CompareTo(element.ContentEnd) < 0 && selection.End.CompareTo(element.ContentStart) > 0;
+
+    private static TextRange SelectedRange(TextElement element, TextRange selection) => new(
+        selection != null && selection.Start.CompareTo(element.ContentStart) > 0 ? selection.Start : element.ContentStart,
+        selection != null && selection.End.CompareTo(element.ContentEnd) < 0 ? selection.End : element.ContentEnd);
+
+    private static string WriteBlocks(BlockCollection blocks, bool insideList = false, TextRange selection = null)
     {
         var output = new List<string>();
         var previousDelimiter = ' ';
         foreach (var block in blocks)
         {
+            if (!Included(block, selection)) continue;
             // CommonMark joins adjacent ordered lists with the same delimiter.
             // Use the other delimiter when the editor has a separate start.
             var delimiter = previousDelimiter == '.' ? ')' : '.';
-            output.Add(WriteBlock(block, insideList, delimiter));
+            output.Add(WriteBlock(block, insideList, delimiter, selection));
             previousDelimiter = block is List { MarkerStyle: TextMarkerStyle.Decimal } ? delimiter : ' ';
         }
         return string.Join("\n\n", output);
     }
 
-    private static string WriteBlock(Block block, bool insideList, char orderedDelimiter)
+    private static string WriteBlock(Block block, bool insideList, char orderedDelimiter, TextRange selection)
     {
         switch (block)
         {
             case Paragraph paragraph:
                 if (FormatOf(paragraph) is CodeBlockInfo code)
                 {
-                    var value = NoteLists.InlineText(paragraph.ContentStart, paragraph.ContentEnd).Replace("\r\n", "\n");
+                    var range = SelectedRange(paragraph, selection);
+                    var value = NoteLists.InlineText(range.Start, range.End).Replace("\r\n", "\n");
                     var fence = CodeFence(value, 3);
                     return fence + code.Language + "\n" + value + "\n" + fence;
                 }
 
-                var text = WriteInlines(paragraph.Inlines);
+                var text = WriteInlines(paragraph.Inlines, selection: selection);
+                if (selection != null && NoteLists.TaskOf(paragraph) is { Child: CheckBox task } marker && !Included(marker, selection))
+                    text = (task.IsChecked == true ? "[x] " : "[ ] ") + text;
                 if (FormatOf(paragraph) is BlockStyle.Divider)
                     return text.Length == 0 ? "---" : "---\n\n" + text;
                 var level = HeadingLevel(paragraph);
@@ -60,7 +81,7 @@ internal static class MarkdownWriter
                     return text + "<br>";
                 return text.Length == 0 ? "<br>" : text;
             case Section section:
-                var children = WriteBlocks(section.Blocks, insideList);
+                var children = WriteBlocks(section.Blocks, insideList, selection);
                 return section.Tag is BlockStyle.Quote || section.BorderThickness.Left > 0
                     ? string.Join("\n", children.Split('\n').Select(line => "> " + line))
                     : children;
@@ -72,22 +93,24 @@ internal static class MarkdownWriter
                     var prefix = list.MarkerStyle == TextMarkerStyle.Decimal
                         ? (number++).ToString(CultureInfo.InvariantCulture) + orderedDelimiter + " "
                         : "- ";
-                    var lines = WriteBlocks(item.Blocks, insideList: true).Split('\n');
+                    if (!Included(item, selection)) continue;
+                    var lines = WriteBlocks(item.Blocks, insideList: true, selection).Split('\n');
                     var indent = new string(' ', prefix.Length);
                     items.Add(prefix + string.Join("\n", lines.Select((line, index) => index == 0 ? line : indent + line)));
                 }
                 return string.Join("\n", items);
             case Table table:
-                return WriteTable(table);
+                return WriteTable(table, selection);
             default:
-                return Escape(new TextRange(block.ContentStart, block.ContentEnd).Text);
+                return Escape(SelectedRange(block, selection).Text);
         }
     }
 
-    private static string WriteTable(Table table)
+    private static string WriteTable(Table table, TextRange selection)
     {
-        var rows = table.RowGroups.SelectMany(group => group.Rows)
-            .Select(row => row.Cells.Select(cell => WriteBlocks(cell.Blocks).Replace("\n", " ")).ToArray())
+        var rows = table.RowGroups.SelectMany(group => group.Rows).Where(row => Included(row, selection))
+            .Select(row => row.Cells.Where(cell => Included(cell, selection))
+                .Select(cell => WriteBlocks(cell.Blocks, selection: selection).Replace("\n", " ")).ToArray())
             .ToArray();
         if (rows.Length == 0) return "";
         var columns = rows.Max(row => row.Length);
@@ -100,11 +123,12 @@ internal static class MarkdownWriter
         return string.Join("\n", result);
     }
 
-    private static string WriteInlines(InlineCollection inlines, InlineStyle inherited = InlineStyle.None)
+    private static string WriteInlines(InlineCollection inlines, InlineStyle inherited = InlineStyle.None, TextRange selection = null)
     {
         var result = new StringBuilder();
         foreach (var inline in inlines)
         {
+            if (!Included(inline, selection)) continue;
             var style = inherited;
             // Hyperlinks already supply their own underline.
             if (inline is not Hyperlink && inline.TextDecorations is { } decorations)
@@ -122,7 +146,13 @@ internal static class MarkdownWriter
                     if (run.FontWeight.ToOpenTypeWeight() >= FontWeights.Bold.ToOpenTypeWeight()) style |= InlineStyle.Bold;
                     if (run.FontStyle != FontStyles.Normal) style |= InlineStyle.Italic;
                     if (run.FontFamily.Source == CodeFont.Source) style |= InlineStyle.Code;
-                    result.Append(WriteRun(run.Text, style));
+                    var text = run.Text;
+                    if (selection != null)
+                    {
+                        var selected = SelectedRange(run, selection);
+                        text = NoteLists.InlineText(selected.Start, selected.End);
+                    }
+                    result.Append(WriteRun(text, style));
                     break;
                 case LineBreak:
                     result.Append("<br>");
@@ -131,7 +161,7 @@ internal static class MarkdownWriter
                     result.Append(check.IsChecked == true ? "[x] " : "[ ] ");
                     break;
                 case Span span:
-                    var content = WriteInlines(span.Inlines, style);
+                    var content = WriteInlines(span.Inlines, style, selection);
                     var link = span.Tag as LinkInfo;
                     var url = link?.Url ?? (span as Hyperlink)?.NavigateUri?.OriginalString;
                     result.Append(url == null ? content : (link?.IsImage == true ? "!" : "") +

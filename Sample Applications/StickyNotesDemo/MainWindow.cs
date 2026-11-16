@@ -28,15 +28,17 @@ public partial class MainWindow : Window
     private bool hotkeyRegistered;
     private bool exiting;
 
-    public MainWindow(NoteStore store)
+    public MainWindow(NoteStore store) : this(store, store.LoadSettings()) { }
+
+    private MainWindow(NoteStore store, NoteSettings settings)
     {
         this.store=store;
-        InitializeComponent();
-        settings = store.LoadSettings();
-        RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
+        this.settings = settings;
         saveTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(600) };
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
         gameMouse = new GameMouseMonitor(SetNotesMousePassthrough, MouseModeFailed);
+        InitializeComponent();
+        RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
     }
     public void Start(bool atSignIn = false)
     {
@@ -180,10 +182,11 @@ public partial class MainWindow : Window
         PrepareForShutdown();
         Application.Current.Shutdown();
     }
-    internal void EndSession()
+    internal bool EndSession()
     {
-        Save();
+        if (!Save()) return false;
         PrepareForShutdown();
+        return true;
     }
     internal void PrepareForShutdown()
     {
