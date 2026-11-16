@@ -18,8 +18,7 @@ namespace StickyNotesDemo;
 
 public sealed class Window2 : Window
 {
-    private const double HeaderHeight = 28;
-    private const double FooterHeight = 34;
+    private const double ToolbarHeight = 28;
     private static readonly ResourceDictionary FormattingToolbarStyles = new()
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/FormattingToolbar.xaml")
@@ -37,6 +36,7 @@ public sealed class Window2 : Window
     private DispatcherOperation formattingRefresh;
     private bool disposing;
     private bool editing;
+    internal bool MousePassthrough { get; private set; }
 
     public Window2(NoteData data)
     {
@@ -51,9 +51,9 @@ public sealed class Window2 : Window
         paper=new Border { CornerRadius=new CornerRadius(10), Background=PaperBrush, Padding=new Thickness(1) };
         Content=paper;
         var layout = new Grid();
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderHeight) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
         layout.RowDefinitions.Add(new RowDefinition());
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(FooterHeight) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
         paper.Child=layout;
         paper.MouseLeftButtonDown += (_, e) => {
             if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==layout)) DragMove();
@@ -79,7 +79,7 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        var body = new Grid { Margin = new Thickness(16, 2, 16, 14) };
+        var body = new Grid { Margin = new Thickness(16, 2, 16, 2) };
         Grid.SetRow(body, 1);
         layout.Children.Add(body);
         editor = new NoteEditor(data.Markdown) { ContextMenu = context };
@@ -126,6 +126,17 @@ public sealed class Window2 : Window
     {
         base.OnSourceInitialized(e);
         DesktopIntegration.ConfigureNoteWindow(new WindowInteropHelper(this).Handle);
+        if (MousePassthrough)
+            DesktopIntegration.SetNoteMousePassthrough(new WindowInteropHelper(this).Handle, true);
+    }
+
+    internal void SetMousePassthrough(bool enabled)
+    {
+        if (MousePassthrough == enabled) return;
+        if (enabled) FinishEditing();
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle != IntPtr.Zero) DesktopIntegration.SetNoteMousePassthrough(handle, enabled);
+        MousePassthrough = enabled;
     }
 
     public Brush PaperBrush => (Brush)new BrushConverter().ConvertFromString(Data.Color);
@@ -158,7 +169,7 @@ public sealed class Window2 : Window
 
     private UniformGrid CreateFormattingToolbar()
     {
-        var toolbar = new UniformGrid { Rows = 1, Margin = new Thickness(8, 0, 8, 4), Visibility = Visibility.Collapsed };
+        var toolbar = new UniformGrid { Rows = 1, Margin = new Thickness(8, 0, 8, 0), Visibility = Visibility.Collapsed };
         var buttonStyle = (Style)FormattingToolbarStyles["FormatButtonStyle"];
         void Add(string text, string hint, Func<NoteEditor.FormattingState, bool?> state,
             Action apply, InlineStyle style = InlineStyle.None)
@@ -213,7 +224,7 @@ public sealed class Window2 : Window
 
     private static Button IconButton(string glyph, string hint) => new Button {
         Content=glyph, ToolTip=hint, FontFamily=new FontFamily("Segoe MDL2 Assets"), FontSize=12,
-        Width=28, Height=HeaderHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
+        Width=28, Height=ToolbarHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
         Template=FlatButtonTemplate()
     };
     public static ControlTemplate FlatButtonTemplate()
@@ -231,6 +242,7 @@ public sealed class Window2 : Window
     }
     public void Open(bool edit = false, bool activate = true)
     {
+        if (activate) SetMousePassthrough(false);
         Data.IsOpen = true;
         ShowActivated = activate;
         Show();

@@ -30,15 +30,21 @@ public static class DesktopIntegration
     private static extern int SetWindowLongW(IntPtr hwnd, int index, int value);
 
     internal static void ConfigureNoteWindow(IntPtr hwnd)
+        => UpdateExtendedStyle(hwnd, 0x80, 0x40000); // TOOLWINDOW, APPWINDOW
+
+    internal static void SetNoteMousePassthrough(IntPtr hwnd, bool enabled)
+    {
+        const int passthrough = 0x20 | 0x08000000; // TRANSPARENT (layered window) | NOACTIVATE
+        UpdateExtendedStyle(hwnd, enabled ? passthrough : 0, enabled ? 0 : passthrough);
+    }
+
+    private static void UpdateExtendedStyle(IntPtr hwnd, int add, int remove)
     {
         const int extendedStyle = -20;
-        const int toolWindow = 0x80;
-        const int appWindow = 0x40000;
         var style = GetWindowLongW(hwnd, extendedStyle);
         if (style == 0 && Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
 
-        // Keep transparency, topmost and normal click-to-edit activation.
-        if (SetWindowLongW(hwnd, extendedStyle, (style | toolWindow) & ~appWindow) == 0 &&
+        if (SetWindowLongW(hwnd, extendedStyle, (style | add) & ~remove) == 0 &&
             Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
 
         const uint refreshFrame = 0x20 | 0x1 | 0x2 | 0x4 | 0x10; // FRAMECHANGED, NOSIZE, NOMOVE, NOZORDER, NOACTIVATE

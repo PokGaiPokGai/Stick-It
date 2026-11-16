@@ -33,6 +33,8 @@
                         <Button.ContextMenu><ContextMenu>
                             <MenuItem Header="新建便签：Shift + Alt + W" IsEnabled="False"/>
                             <MenuItem Header="点击正文编辑，移开焦点自动渲染 Markdown" IsEnabled="False"/>
+                            <Separator/>
+                            <MenuItem x:Name="AutoMouseMode" Header="游戏鼠标自动穿透" IsCheckable="True" IsChecked="True" Click="MouseModeClick"/>
                             <Separator/><MenuItem Header="立即保存" Click="SaveClick"/>
                             <MenuItem Header="保存并退出" Click="ExitClick"/>
                         </ContextMenu></Button.ContextMenu>
@@ -50,6 +52,9 @@
             </Border>
             <Grid Grid.Row="3" Margin="11,7,11,10">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer.Resources>
+                        <ResourceDictionary Source="/Stick It;component/Assets/ScrollBarStyles.xaml"/>
+                    </ScrollViewer.Resources>
                     <ItemsControl x:Name="NoteList" HorizontalContentAlignment="Stretch">
                         <ItemsControl.ItemTemplate><DataTemplate>
                             <Button Background="{Binding Background}" BorderThickness="0" Padding="0" Margin="0,0,0,8" HorizontalContentAlignment="Stretch" Click="OpenCard" Tag="{Binding Note}">

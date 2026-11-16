@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Markup;
@@ -20,6 +21,10 @@ internal sealed partial class NoteEditor : RichTextBox
     private static readonly ResourceDictionary TaskStyles = new()
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/TaskStyles.xaml")
+    };
+    private static readonly ResourceDictionary ScrollBarStyles = new()
+    {
+        Source = new Uri("pack://application:,,,/Stick It;component/Assets/ScrollBarStyles.xaml")
     };
     private readonly Queue<Action> markdownEdits = new();
     private DispatcherOperation markdownCommit;
@@ -41,6 +46,15 @@ internal sealed partial class NoteEditor : RichTextBox
         Background = Brushes.Transparent;
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         Resources.MergedDictionaries.Add(TaskStyles);
+        Resources.MergedDictionaries.Add(ScrollBarStyles);
+        var scrollStyle = new Style(typeof(ScrollBar), (Style)ScrollBarStyles[typeof(ScrollBar)]);
+        scrollStyle.Triggers.Add(new DataTrigger
+        {
+            Binding = new Binding(nameof(IsReadOnly)) { Source = this }, Value = true,
+            // Keep the gutter reserved so entering edit mode does not reflow text.
+            Setters = { new Setter(OpacityProperty, 0d), new Setter(IsHitTestVisibleProperty, false) }
+        });
+        Resources.Add(typeof(ScrollBar), scrollStyle);
         TextChanged += (_, e) =>
         {
             plainText = null;

@@ -8,8 +8,10 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 - A Windows sign-in entry can launch `"D:\Stick It\Stick It.exe" --startup` using the installed executable's path. Stick It starts in the tray and restores the notes that were left open in their saved positions without bringing the library to the foreground.
 - **Shift + Alt + W** creates a new, pinned note centered on the mouse pointer. The position is constrained to that monitor's work area. The shortcut does not repeat while held; registration failures appear in the library.
 - Individual notes use native tool windows, excluding them from the taskbar and Alt+Tab while retaining normal click-to-edit activation. The library has a taskbar entry only while it is open; closing the library hides it, leaving the tray and notes running.
+- The game mouse preview automatically makes notes mouse-transparent while another foreground window locks its pointer, or hides it while confined/fullscreen. A visible movable pointer, releasing a previously observed confinement, or activating Stick It restores interaction. The tray and library settings have a **游戏鼠标自动穿透** toggle; this preview enables it on each launch.
 - Click the tray icon to open the library. Its menu includes new note and save/exit.
-- New notes start as 320 × 320 squares and open on top. Click the body to edit and reveal the close button. The body keeps the same position and size as the button appears or disappears. Drag the top strip or the paper margin to move a note. Right-click the paper to change its color or delete it.
+- New notes start as 320 × 320 squares and open on top. Click the body to edit and reveal the close button. The top and bottom toolbars reserve matching 28-DIP strips with a 2-DIP gap to the body, keeping symmetric margins and stable content when editing controls appear or disappear. Drag the top strip or the paper margin to move a note. Right-click the paper to change its color or delete it.
+- Notes and the library use slim gray scrollbars with transparent tracks and no arrow buttons. Notes show their scrollbar only while editing, keeping the same text width and scroll position when it disappears. Hovering or dragging widens and darkens the thumb; wheel, thumb dragging and track paging remain available.
 - Closing a note hides it; click its library card to reopen it. Deletion requires confirmation.
 - Click the note body to edit the formatted content in place. The bottom toolbar offers heading, bold, italic, underline, strikethrough, bulleted list, numbered list, task, and inline code. A filled button indicates an active format and an outlined button indicates a format applied to part of the selection. Click a task checkbox to change its state.
 - Press **Ctrl + Shift + 7 / 8 / 9** for numbered, bulleted, or task lists. Use **Tab** and **Shift + Tab** (or **Ctrl + ] / [**) to change the indentation of the current item or selection. **Enter** continues a list, an empty item moves out one level, and **Shift + Enter** adds a line break within an item. Backspace at the start of an item also moves it out one level.
@@ -41,3 +43,18 @@ dotnet run --no-restore --project "Sample Applications/StickyNotesDemo/Checks/Ch
 ```
 
 The checks use isolated temporary files and a unique mutex/event namespace. They cover process exclusion, activation signals, owner exit/crash, cursor placement calculations, persistence, legacy import, Markdown, search, and close-to-hide. Editor checks send WPF events within the test process and verify rapid typing, heading resets, list selections, nesting, undo/redo, and note storage. They also measure list alignment and spacing in offscreen WPF renders. Native-window checks create hidden handles to verify tool-window classification, transparency, topmost state and activation flags. The tests run without showing windows, starting a tray icon, registering a hotkey, or using desktop input. Alt+Tab and Win+Tab visibility still require checking in the target Windows shell.
+
+## Game mouse preview validation
+
+The detector observes Windows cursor/foreground events and samples confinement every 50 ms. It never hides, moves or clips the user's cursor and never activates the game. Its policy is tested separately from its native window changes, including stale cursor events, a note supplying its own cursor, foreground changes, touch/pen suppression, multiple monitor coordinates and turning automatic mode off. Native hook start/stop and hidden note handles are checked without desktop input.
+
+Real games still require user verification. The preview feature is available in the installed application at `D:\Stick It`; use its tray/settings toggle to enable or disable automatic passthrough. All builds share the same single-instance gate and note store.
+
+For windowed, borderless fullscreen and exclusive fullscreen modes, verify the following with an open note over the game:
+
+1. Enter view control: moving and clicking over the note must leave game input active.
+2. Open a menu/backpack with a free visible pointer: the note must become clickable and editable.
+3. Return to view control and repeat, including when the pointer is already over a note.
+4. Switch to another application, use the new-note shortcut, and toggle automatic mode off: normal note interaction must be available.
+
+This is an external detector, not a game-state API. A windowed game that uses only relative input/recentering without Windows confinement can be indistinguishable from ordinary cursor hiding. A software-cursor menu that keeps the Windows cursor hidden and never releases confinement can also be ambiguous. These cases are not claimed as verified; use the toggle to disable the preview if its detection does not match a game's input mode.

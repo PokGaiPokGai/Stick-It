@@ -18,8 +18,10 @@ public partial class MainWindow : Window
     private readonly NoteStore store;
     private readonly List<Window2> notes=new();
     private readonly DispatcherTimer saveTimer;
+    private readonly GameMouseMonitor gameMouse;
     private System.Windows.Forms.NotifyIcon tray;
     private System.Windows.Forms.ContextMenuStrip trayMenu;
+    private System.Windows.Forms.ToolStripMenuItem trayMouseMode;
     private System.Drawing.Icon trayArtwork;
     private HwndSource source;
     private bool hotkeyRegistered;
@@ -31,6 +33,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         saveTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(600) };
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
+        gameMouse = new GameMouseMonitor(SetNotesMousePassthrough, MouseModeFailed);
     }
     public void Start(bool atSignIn = false)
     {
@@ -39,6 +42,9 @@ public partial class MainWindow : Window
         trayMenu=new System.Windows.Forms.ContextMenuStrip();
         trayMenu.Items.Add("打开便签列表",null,(_,_)=>ShowLibrary());
         trayMenu.Items.Add("新建便签    Shift + Alt + W",null,(_,_)=>CreateNote());
+        trayMouseMode = new System.Windows.Forms.ToolStripMenuItem("游戏鼠标自动穿透") { CheckOnClick = true, Checked = true };
+        trayMouseMode.Click += (_, _) => SetMouseMode(trayMouseMode.Checked);
+        trayMenu.Items.Add(trayMouseMode);
         trayMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         trayMenu.Items.Add("保存并退出",null,(_,_)=>ExitApp());
         tray=new System.Windows.Forms.NotifyIcon { Text="Stick It", Icon=trayArtwork, ContextMenuStrip=trayMenu, Visible=true };
@@ -49,6 +55,7 @@ public partial class MainWindow : Window
             new WindowInteropHelper(this).EnsureHandle();
         }
         else ShowLibrary();
+        gameMouse.Start();
         foreach (var note in openNotes) note.Open(activate: !atSignIn);
     }
 
@@ -82,8 +89,27 @@ public partial class MainWindow : Window
         note.Changed+=QueueSave;
         note.CardChanged+=RefreshVisibleList;
         note.DeleteRequested+=()=>DeleteNote(note);
+        note.SetMousePassthrough(gameMouse.Passthrough);
         return note;
     }
+    private void SetNotesMousePassthrough(bool enabled)
+    {
+        foreach (var note in notes) note.SetMousePassthrough(enabled);
+    }
+    private void SetMouseMode(bool enabled)
+    {
+        AutoMouseMode.IsChecked = enabled;
+        trayMouseMode.Checked = enabled;
+        if (enabled) gameMouse.Start();
+        else gameMouse.Stop();
+    }
+    private void MouseModeFailed(Win32Exception error)
+    {
+        AutoMouseMode.IsChecked = false;
+        trayMouseMode.Checked = false;
+        Report("游戏鼠标自动穿透已停用：" + error.Message);
+    }
+    private void MouseModeClick(object sender, RoutedEventArgs e) => SetMouseMode(AutoMouseMode.IsChecked);
     private void CreateNote()
     {
         var note=AddNote(new NoteData());
@@ -146,6 +172,7 @@ public partial class MainWindow : Window
     {
         exiting = true;
         saveTimer.Stop();
+        gameMouse.Dispose();
         foreach (var note in notes) note.PrepareForShutdown();
         if (hotkeyRegistered) DesktopIntegration.UnregisterHotKey(source.Handle, DesktopIntegration.HotkeyId);
         source?.RemoveHook(WindowMessage);
