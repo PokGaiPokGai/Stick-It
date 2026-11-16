@@ -129,12 +129,68 @@ internal static partial class Checks
         Assert(IsGray(Highlight(active).Background) && IsGray(Highlight(mixed).BorderBrush) &&
                IsGray(uncheckedBox.BorderBrush) && IsGray(checkedBox.Background),
                "format controls and task checkboxes use neutral state colors");
+        TestToolbarScrolling(output);
     }
 
-    private static UniformGrid FormattingBar(Window2 window)
-        => (UniformGrid)typeof(Window2).GetField("footer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+    private static void TestToolbarScrolling(string output)
+    {
+        var note = new EditorSession("正文\n\n" + string.Join("\n", Enumerable.Range(1, 24).Select(i => $"- 项目 {i}")));
+        var surface = (FrameworkElement)note.Window.Content;
+        var scroller = FormattingScroller(note.Window);
+        var bar = FormattingBar(note.Window);
+        var buttons = bar.Children.OfType<ToggleButton>().ToArray();
+        Render(surface, 320, 220, Path.Combine(output, "toolbar-default.png"));
+        var originalWidths = buttons.Select(button => button.ActualWidth).ToArray();
+        Render(surface, 600, 220, Path.Combine(output, "toolbar-wide.png"));
+        Assert(buttons.Select(button => button.ActualWidth).SequenceEqual(originalWidths) &&
+               scroller.ScrollableWidth == 0 && buttons[0].TranslatePoint(new Point(), scroller).X == 0,
+               "widening a note keeps fixed-width toolbar buttons aligned to the left");
+        Render(surface, 200, 220, Path.Combine(output, "toolbar-narrow-left.png"));
+        Assert(buttons.Select(button => button.ActualWidth).SequenceEqual(originalWidths) && scroller.ScrollableWidth > 0,
+               "narrow notes clip the toolbar instead of squeezing or wrapping its buttons");
 
-    private static ToggleButton FindFormatButton(UniformGrid bar, string name)
+        note.Select(note.Body(), note.Body());
+        var selection = note.Editor.Selection.Text;
+        var bodyOffset = note.Editor.VerticalOffset;
+        bool Wheel(int delta, bool layout = true)
+        {
+            var args = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, delta) { RoutedEvent = Mouse.PreviewMouseWheelEvent };
+            bar.RaiseEvent(args);
+            if (layout) surface.UpdateLayout();
+            return args.Handled;
+        }
+        Assert(Wheel(-120) && scroller.HorizontalOffset > 0 && note.Editor.VerticalOffset == bodyOffset &&
+               note.Editor.Selection.Text == selection,
+               "wheel over the toolbar scrolls horizontally without moving the note body or selection");
+        Assert(Wheel(120) && scroller.HorizontalOffset == 0, "reverse wheel returns to the first toolbar button");
+        Wheel(-120, layout: false);
+        Wheel(-120, layout: false);
+        surface.UpdateLayout();
+        Assert(scroller.HorizontalOffset == 2 * originalWidths[0], "rapid wheel events retain the full toolbar scroll distance");
+        Wheel(30);
+        Assert(scroller.HorizontalOffset == 1.75 * originalWidths[0], "high-resolution wheel deltas retain fractional scrolling");
+        Wheel(-1200);
+        Render(surface, 200, 220, Path.Combine(output, "toolbar-narrow-right.png"));
+        var lastBounds = new Rect(buttons[^1].TranslatePoint(new Point(), scroller), buttons[^1].RenderSize);
+        Assert(scroller.HorizontalOffset == scroller.ScrollableWidth && lastBounds.Left >= 0 && lastBounds.Right <= scroller.ViewportWidth,
+               "scrolling clamps at the end and fully exposes the last format button");
+        FormatToggle(buttons[^1]).Toggle();
+        DrainFormatting();
+        Assert(buttons[^1].IsChecked == true && note.Markdown.StartsWith("`正文`", StringComparison.Ordinal),
+               "a scrolled-in format button edits the retained selection and displays its active state");
+        Render(surface, 600, 220, Path.Combine(output, "toolbar-expanded.png"));
+        Assert(scroller.HorizontalOffset == 0 && scroller.ScrollableWidth == 0 &&
+               buttons.Select(button => button.ActualWidth).SequenceEqual(originalWidths),
+               "expanding a scrolled note restores the whole toolbar without stretching buttons");
+        note.Window.DisposeWindow();
+    }
+
+    private static ScrollViewer FormattingScroller(Window2 window)
+        => (ScrollViewer)typeof(Window2).GetField("footer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+
+    private static StackPanel FormattingBar(Window2 window) => (StackPanel)FormattingScroller(window).Content;
+
+    private static ToggleButton FindFormatButton(Panel bar, string name)
         => bar.Children.OfType<ToggleButton>().Single(button => ((string)button.ToolTip).StartsWith(name, StringComparison.Ordinal));
 
     private static IToggleProvider FormatToggle(ToggleButton button)

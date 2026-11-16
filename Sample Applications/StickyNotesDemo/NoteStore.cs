@@ -11,10 +11,12 @@ namespace StickyNotesDemo;
 public sealed class NoteData
 {
     private const double DefaultSide = 320;
+    internal const string DefaultColor = "#FFF7C2";
+    internal static readonly string[] Colors = [DefaultColor, "#E2F1FF", "#F5E0F0", "#E4F2D5", "#EEE8FB", "#F0F0F0"];
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Markdown { get; set; } = "";
-    public string Color { get; set; } = "#FFF7C2";
+    public string Color { get; set; } = DefaultColor;
     public DateTime Modified { get; set; } = DateTime.Now;
     public double Left { get; set; } = 100;
     public double Top { get; set; } = 100;
@@ -23,10 +25,36 @@ public sealed class NoteData
     public bool IsOpen { get; set; } = true;
 }
 
+public sealed class NoteSettings
+{
+    public bool RandomNewNoteColor { get; set; } = true;
+
+    internal NoteData CreateNote(Random random) => new()
+    {
+        Color = RandomNewNoteColor ? NoteData.Colors[random.Next(NoteData.Colors.Length)] : NoteData.DefaultColor
+    };
+}
+
 public sealed class NoteStore
 {
     private readonly string directory;
     public NoteStore(string directory) { this.directory = directory; }
+    public NoteSettings LoadSettings()
+    {
+        var path = Path.Combine(directory, "settings.json");
+        if (!File.Exists(path)) return new NoteSettings();
+        return JsonSerializer.Deserialize<NoteSettings>(File.ReadAllText(path))
+            ?? throw new InvalidDataException("设置数据为空。");
+    }
+
+    public void SaveSettings(NoteSettings settings)
+    {
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "settings.json");
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+
     public List<NoteData> Load()
     {
         var path = Path.Combine(directory, "notes.json");

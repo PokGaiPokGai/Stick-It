@@ -39,7 +39,7 @@ internal static partial class Checks
             typeof(InputManager).GetField("_primaryKeyboardDevice", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(InputManager.Current, offlineKeyboard);
 
-            TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
+            TestStore(temp); TestSettings(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
             TestSessionRestore(temp);
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
@@ -230,7 +230,8 @@ internal static partial class Checks
         Assert(list.Items.Count==1,"search filters library cards");
         var editor=Find<RichTextBox>((DependencyObject)note.Content);
         var document = editor.Document;
-        var formatBar = (UniformGrid)typeof(Window2).GetField("footer", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(note);
+        var formatBar = FormattingBar(note);
+        var footer = FormattingScroller(note);
         var body = (FrameworkElement)VisualTreeHelper.GetParent(editor);
         Rect BodyBounds() => new Rect(body.TranslatePoint(new Point(), noteSurface), body.RenderSize);
         var readingBounds = BodyBounds();
@@ -238,11 +239,11 @@ internal static partial class Checks
         Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-editing-preview.png"));
         Assert(BodyBounds() == readingBounds && Math.Abs(readingBounds.Top - (noteHeight - readingBounds.Bottom)) < .01,
             "showing the toolbar preserves the body bounds and matching top/bottom margins");
-        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
+        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
         Invoke(note,"FinishEditing");
         noteSurface.UpdateLayout();
         Assert(BodyBounds() == readingBounds, "hiding the toolbar keeps the body origin and size");
-        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
+        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
         CheckRichEditing(note, editor, formatBar);
         editor.Document.Blocks.Clear();
         editor.Document.Blocks.Add(new Paragraph());
@@ -257,7 +258,7 @@ internal static partial class Checks
         var libraryClose=new CancelEventArgs(); Invoke(main,"OnClosing",libraryClose);
         Assert(libraryClose.Cancel&&!main.ShowInTaskbar,"closing library removes taskbar entry without exiting");
     }
-    static void CheckRichEditing(Window2 note, RichTextBox editor, UniformGrid formatBar)
+    static void CheckRichEditing(Window2 note, RichTextBox editor, Panel formatBar)
     {
         Invoke(note, "BeginEditing");
         var paragraph = (Paragraph)editor.Document.Blocks.FirstBlock;

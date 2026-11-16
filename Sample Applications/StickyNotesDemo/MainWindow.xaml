@@ -34,6 +34,7 @@
                             <MenuItem Header="新建便签：Shift + Alt + W" IsEnabled="False"/>
                             <MenuItem Header="点击正文编辑，移开焦点自动渲染 Markdown" IsEnabled="False"/>
                             <Separator/>
+                            <MenuItem x:Name="RandomNoteColor" Header="新建便签随机颜色" IsCheckable="True" Click="RandomNoteColorClick"/>
                             <MenuItem x:Name="AutoMouseMode" Header="游戏鼠标自动穿透" IsCheckable="True" IsChecked="True" Click="MouseModeClick"/>
                             <Separator/><MenuItem Header="立即保存" Click="SaveClick"/>
                             <MenuItem Header="保存并退出" Click="ExitClick"/>

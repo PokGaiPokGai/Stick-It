@@ -16,6 +16,7 @@ namespace StickyNotesDemo;
 public partial class MainWindow : Window
 {
     private readonly NoteStore store;
+    private readonly NoteSettings settings;
     private readonly List<Window2> notes=new();
     private readonly DispatcherTimer saveTimer;
     private readonly GameMouseMonitor gameMouse;
@@ -31,6 +32,8 @@ public partial class MainWindow : Window
     {
         this.store=store;
         InitializeComponent();
+        settings = store.LoadSettings();
+        RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
         saveTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(600) };
         saveTimer.Tick += (_, _) => { saveTimer.Stop(); Save(); };
         gameMouse = new GameMouseMonitor(SetNotesMousePassthrough, MouseModeFailed);
@@ -110,9 +113,23 @@ public partial class MainWindow : Window
         Report("游戏鼠标自动穿透已停用：" + error.Message);
     }
     private void MouseModeClick(object sender, RoutedEventArgs e) => SetMouseMode(AutoMouseMode.IsChecked);
+    private void RandomNoteColorClick(object sender, RoutedEventArgs e)
+    {
+        var updated = new NoteSettings { RandomNewNoteColor = RandomNoteColor.IsChecked };
+        try
+        {
+            store.SaveSettings(updated);
+            settings.RandomNewNoteColor = updated.RandomNewNoteColor;
+        }
+        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+        {
+            RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
+            Report("设置未能保存：" + error.Message);
+        }
+    }
     private void CreateNote()
     {
-        var note=AddNote(new NoteData());
+        var note=AddNote(settings.CreateNote(Random.Shared));
         DesktopIntegration.PlaceAtCursor(note);
         note.Open(edit:true);
         OnNotesChanged();
