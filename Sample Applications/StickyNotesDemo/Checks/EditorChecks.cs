@@ -214,8 +214,10 @@ internal static partial class Checks
         Render((FrameworkElement)note.Window.Content, 320, 320, screenshot);
         var rows = new[] { note.Row(0, 0), note.Row(0, 1), note.Row(0, 2), note.Row(1), note.Row(2), note.Row(2, 1) };
         var rects = rows.Select(row => row.Inlines.OfType<Run>().First().ContentStart.GetCharacterRect(LogicalDirection.Forward)).ToArray();
-        Assert(rects.All(rect => !rect.IsEmpty) && rects.Max(rect => rect.Left) - rects.Min(rect => rect.Left) <= 1,
-               "rendered text starts align for imported bullets, task and newly created bullets");
+        var bulletRects = rects.Where((_, index) => index != 3).ToArray();
+        Assert(rects.All(rect => !rect.IsEmpty) && bulletRects.Max(rect => rect.Left) - bulletRects.Min(rect => rect.Left) <= 1 &&
+               bulletRects[0].Left < rects[3].Left,
+               "imported and newly created bullets align with a smaller inset than task checkboxes");
         var spacing = rects.Zip(rects.Skip(1), (first, next) => next.Top - first.Top).ToArray();
         Assert(spacing.Min() > 0 && spacing.Max() - spacing.Min() <= 2,
                "rendered list spacing is consistent across marker types");

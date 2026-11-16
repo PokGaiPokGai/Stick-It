@@ -14,10 +14,9 @@ internal static class NoteLists
 
     internal const double TaskWidth = 20;
     internal const double TaskGap = 5;
-    private const double TextInset = 26;
     private static readonly Thickness BodyMargin = new(0, 0, 0, 8);
     private static readonly Thickness ItemMargin = new(0, 0, 0, 4);
-    private static readonly Thickness ListPadding = new(TextInset, 0, 0, 0);
+    private static Thickness ListPadding(Kind kind) => new(kind == Kind.Bullets ? 16 : 26, 0, 0, 0);
     private static readonly DependencyProperty TaskCompletedProperty = DependencyProperty.RegisterAttached(
         "TaskCompleted", typeof(bool), typeof(NoteLists), new PropertyMetadata(false));
     internal static readonly Style TaskParagraphStyle = new(typeof(Paragraph))
@@ -44,7 +43,7 @@ internal static class NoteLists
     internal static List Create(Kind kind, int startIndex = 1) => new()
     {
         MarkerStyle = Marker(kind), StartIndex = startIndex,
-        Margin = new Thickness(0), Padding = ListPadding, MarkerOffset = 4
+        Margin = new Thickness(0), Padding = ListPadding(kind), MarkerOffset = 4
     };
 
     private static TextMarkerStyle Marker(Kind kind) => kind switch
@@ -274,7 +273,7 @@ internal static class NoteLists
     private static void NormalizeBlocks(BlockCollection blocks, bool inList)
     {
         // A pasted Markdown list can alternate checkboxes and bullets. Each
-        // run gets its own marker style, while all rows share the same inset.
+        // run gets its own marker style and the inset for that marker type.
         foreach (var list in blocks.OfType<List>().ToArray())
         {
             if (list.ListItems.Count == 0) { blocks.Remove(list); continue; }
@@ -309,7 +308,7 @@ internal static class NoteLists
                     list = previous;
                 }
                 list.Margin = new Thickness(0);
-                list.Padding = ListPadding;
+                list.Padding = ListPadding(kind);
                 list.MarkerOffset = 4;
                 foreach (var item in list.ListItems.ToArray())
                 {
