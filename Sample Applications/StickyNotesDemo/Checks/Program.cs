@@ -18,6 +18,7 @@ using StickyNotesDemo;
 
 internal static partial class Checks
 {
+    private static OfflineKeyboard offlineKeyboard;
     static void Assert(bool value,string message) { if(!value) throw new Exception(message); Console.WriteLine("PASS "+message); }
     [STAThread] static int Main(string[] args)
     {
@@ -32,14 +33,22 @@ internal static partial class Checks
         try {
             TestSingleInstance(); TestPlacement();
             var app=new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
+            // WPF KeyGesture.Matches reads Keyboard.Modifiers, not the event's
+            // device. Keep that lookup independent of the user's real keyboard.
+            offlineKeyboard = new OfflineKeyboard();
+            typeof(InputManager).GetField("_primaryKeyboardDevice", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(InputManager.Current, offlineKeyboard);
 
-            TestStore(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
+            TestStore(temp); TestSettings(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
             TestSessionRestore(temp);
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
             TestTaskCompletion(temp);
             TestNotePreviews(temp, output);
             TestNoteWindowStyles();
+            TestGameMousePolicy();
+            TestGameMouseWindows();
+            TestGameMouseMonitorLifecycle();
             Console.WriteLine("All checks passed. No window, tray icon, hotkey, or desktop input was activated."); return 0;
         } catch(Exception error) { Console.Error.WriteLine(error); return 1; } finally { Directory.Delete(temp,true); }
     }
@@ -176,23 +185,65 @@ internal static partial class Checks
         Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-preview.png"));
         var tasks = new Window2(new NoteData { Markdown = "## 今日待办\n\n- [ ] 整理设计参考\n- [x] 保存便签改动" });
         Render((FrameworkElement)tasks.Content, (int)tasks.Width, (int)tasks.Height, Path.Combine(output, "tasks-preview.png"));
+        var longNote = new Window2(new NoteData
+        {
+            Markdown = "## 长便签\n\n" + string.Join("\n", Enumerable.Range(1, 24).Select(i => $"- 第 {i} 项：记录需要处理的事情"))
+        });
+        Render((FrameworkElement)longNote.Content, 320, 320, Path.Combine(output, "scrollbar-reading-preview.png"));
+        var scroller = Find<ScrollViewer>((DependencyObject)longNote.Content);
+        var scrollbar = (ScrollBar)scroller.Template.FindName("PART_VerticalScrollBar", scroller);
+        var viewportWidth = scroller.ViewportWidth;
+        Assert(scrollbar.Opacity == 0 && !scrollbar.IsHitTestVisible,
+            "inactive notes hide the scrollbar and its mouse target");
+        Invoke(longNote, "BeginEditing");
+        Render((FrameworkElement)longNote.Content, 320, 320, Path.Combine(output, "scrollbar-preview.png"));
+        Assert(scrollbar.Opacity == 1 && scrollbar.IsHitTestVisible && scroller.ViewportWidth == viewportWidth,
+            "editing reveals the scrollbar without changing the text viewport width");
+        var track = (Track)scrollbar.Template.FindName("PART_Track", scrollbar);
+        var pageDown = track.IncreaseRepeatButton;
+        ((RoutedCommand)pageDown.Command).Execute(pageDown.CommandParameter, pageDown.CommandTarget);
+        scroller.UpdateLayout();
+        Assert(scroller.VerticalOffset > 0, "slim scrollbar track still pages through long notes");
+        var offset = scroller.VerticalOffset;
+        track.Thumb.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+        track.Thumb.RaiseEvent(new DragDeltaEventArgs(0, 12) { RoutedEvent = Thumb.DragDeltaEvent });
+        track.Thumb.RaiseEvent(new DragCompletedEventArgs(0, 12, false) { RoutedEvent = Thumb.DragCompletedEvent });
+        scroller.UpdateLayout();
+        Assert(scroller.VerticalOffset > offset, "slim scrollbar thumb retains drag scrolling");
+        offset = scroller.VerticalOffset;
+        scroller.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, 120) { RoutedEvent = Mouse.MouseWheelEvent });
+        scroller.UpdateLayout();
+        Assert(scroller.VerticalOffset < offset, "restyled note scrollbars retain mouse-wheel scrolling");
+        offset = scroller.VerticalOffset;
+        Invoke(longNote, "FinishEditing");
+        scroller.UpdateLayout();
+        Assert(scrollbar.Opacity == 0 && !scrollbar.IsHitTestVisible &&
+               scroller.ViewportWidth == viewportWidth && scroller.VerticalOffset == offset,
+            "leaving edit mode hides the scrollbar without moving or reflowing the note");
+        scroller.ScrollToTop();
+        Render((FrameworkElement)longNote.Content, 382, 190, Path.Combine(output, "compact-note-reading.png"));
+        Invoke(longNote, "BeginEditing");
+        Render((FrameworkElement)longNote.Content, 382, 190, Path.Combine(output, "compact-note-editing.png"));
+        longNote.DisposeWindow();
         var search=(TextBox)main.FindName("SearchBox"); search.Text="fork";
         var list=(ItemsControl)main.FindName("NoteList");
         Assert(list.Items.Count==1,"search filters library cards");
         var editor=Find<RichTextBox>((DependencyObject)note.Content);
         var document = editor.Document;
-        var formatBar = (UniformGrid)typeof(Window2).GetField("footer", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(note);
+        var formatBar = FormattingBar(note);
+        var footer = FormattingScroller(note);
         var body = (FrameworkElement)VisualTreeHelper.GetParent(editor);
         Rect BodyBounds() => new Rect(body.TranslatePoint(new Point(), noteSurface), body.RenderSize);
         var readingBounds = BodyBounds();
         Invoke(note,"BeginEditing");
         Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-editing-preview.png"));
-        Assert(BodyBounds() == readingBounds, "showing the toolbar keeps the body origin and size");
-        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
+        Assert(BodyBounds() == readingBounds && Math.Abs(readingBounds.Top - (noteHeight - readingBounds.Bottom)) < .01,
+            "showing the toolbar preserves the body bounds and matching top/bottom margins");
+        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
         Invoke(note,"FinishEditing");
         noteSurface.UpdateLayout();
         Assert(BodyBounds() == readingBounds, "hiding the toolbar keeps the body origin and size");
-        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && formatBar.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
+        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
         CheckRichEditing(note, editor, formatBar);
         editor.Document.Blocks.Clear();
         editor.Document.Blocks.Add(new Paragraph());
@@ -207,7 +258,7 @@ internal static partial class Checks
         var libraryClose=new CancelEventArgs(); Invoke(main,"OnClosing",libraryClose);
         Assert(libraryClose.Cancel&&!main.ShowInTaskbar,"closing library removes taskbar entry without exiting");
     }
-    static void CheckRichEditing(Window2 note, RichTextBox editor, UniformGrid formatBar)
+    static void CheckRichEditing(Window2 note, RichTextBox editor, Panel formatBar)
     {
         Invoke(note, "BeginEditing");
         var paragraph = (Paragraph)editor.Document.Blocks.FirstBlock;
@@ -233,7 +284,7 @@ internal static partial class Checks
             editor.CaretPosition = line.ContentEnd;
         }
 
-        var keyboard = new OfflineKeyboard();
+        var keyboard = offlineKeyboard;
         var inputSource = new OfflineInputSource { RootVisual = editor };
         void DrainInput() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
         void Type(string text)
@@ -276,7 +327,7 @@ internal static partial class Checks
         Type("标题");
         DrainInput();
         Assert(note.PlainText == "标题" && ((Paragraph)editor.Document.Blocks.FirstBlock).FontSize == 22,
-               "queued WPF typing and Space turn the prefix into a heading");
+               $"queued WPF typing and Space turn the prefix into a heading (text={note.PlainText}, size={((Paragraph)editor.Document.Blocks.FirstBlock).FontSize}, readOnly={editor.IsReadOnly}, modifiers={Keyboard.Modifiers})");
         EnterText("已有文字 **粗体**");
         PressSpace(drain: false);
         Type("接着写");

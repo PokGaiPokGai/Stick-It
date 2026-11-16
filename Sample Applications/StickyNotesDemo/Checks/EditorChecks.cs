@@ -231,7 +231,7 @@ internal static partial class Checks
 
     private sealed class EditorSession
     {
-        private readonly OfflineKeyboard keyboard = new();
+        private readonly OfflineKeyboard keyboard = offlineKeyboard;
         private readonly OfflineInputSource input;
         internal Window2 Window { get; }
         internal RichTextBox Editor { get; }

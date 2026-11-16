@@ -9,7 +9,7 @@
     <AssemblyName>Stick It</AssemblyName>
     <Product>Stick It</Product>
     <Title>Stick It</Title>
-    <Version>0.4.10</Version>
+    <Version>0.5.0-preview.3</Version>
     <ApplicationIcon>Assets/StickIt.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
@@ -18,7 +18,9 @@
     <Page Include="MainWindow.xaml" />
     <Page Include="Assets/FormattingToolbar.xaml" />
     <Page Include="Assets/TaskStyles.xaml" />
-    <Compile Include="App.cs;MainWindow.cs;Window2.cs;NoteStore.cs;SingleInstance.cs;DesktopIntegration.cs;MarkdownView.cs;MarkdownWriter.cs;NoteEditor.cs;NoteEditor.Blocks.cs;NoteEditor.Formatting.cs;NoteLists.cs;NotePreview.cs" />
+    <Page Include="Assets/ScrollBarStyles.xaml" />
+    <Compile Include="App.cs;MainWindow.cs;Window2.cs;NoteStore.cs;SingleInstance.cs;DesktopIntegration.cs;GameMouseMonitor.cs;MousePassthroughPolicy.cs;MarkdownView.cs;MarkdownWriter.cs;NoteEditor.cs;NoteEditor.Blocks.cs;NoteEditor.Formatting.cs;NoteLists.cs;NotePreview.cs" />
+    <InternalsVisibleTo Include="Checks" />
     <Resource Include="Assets/StickIt.ico" />
     <None Include="Assets/StickIt.png" />
     <PackageReference Include="Markdig" Version="1.6.0" />

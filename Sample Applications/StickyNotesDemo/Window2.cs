@@ -18,8 +18,8 @@ namespace StickyNotesDemo;
 
 public sealed class Window2 : Window
 {
-    private const double HeaderHeight = 28;
-    private const double FooterHeight = 34;
+    private const double ToolbarHeight = 28;
+    private const double FormatButtonWidth = 32;
     private static readonly ResourceDictionary FormattingToolbarStyles = new()
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/FormattingToolbar.xaml")
@@ -32,11 +32,12 @@ public sealed class Window2 : Window
     private readonly NoteEditor editor;
     private readonly Border paper;
     private readonly Grid header;
-    private readonly UniformGrid footer;
+    private readonly ScrollViewer footer;
     private readonly TextBlock placeholder;
     private DispatcherOperation formattingRefresh;
     private bool disposing;
     private bool editing;
+    internal bool MousePassthrough { get; private set; }
 
     public Window2(NoteData data)
     {
@@ -51,9 +52,9 @@ public sealed class Window2 : Window
         paper=new Border { CornerRadius=new CornerRadius(10), Background=PaperBrush, Padding=new Thickness(1) };
         Content=paper;
         var layout = new Grid();
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderHeight) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
         layout.RowDefinitions.Add(new RowDefinition());
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(FooterHeight) });
+        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
         paper.Child=layout;
         paper.MouseLeftButtonDown += (_, e) => {
             if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==layout)) DragMove();
@@ -70,7 +71,7 @@ public sealed class Window2 : Window
         var context=new ContextMenu();
         paper.ContextMenu = context;
         var palette=new StackPanel { Orientation=Orientation.Horizontal, Margin=new Thickness(4) };
-        foreach (var color in new[] { "#FFF7C2", "#E2F1FF", "#F5E0F0", "#E4F2D5", "#EEE8FB", "#F0F0F0" })
+        foreach (var color in NoteData.Colors)
         {
             var swatch=new Button { Width=24, Height=24, Margin=new Thickness(3), Background=(Brush)new BrushConverter().ConvertFromString(color), BorderThickness=new Thickness(0), ToolTip=color };
             swatch.Click += (_, _) => { Data.Color=color; paper.Background=PaperBrush; Data.Modified=DateTime.Now; context.IsOpen=false; NotifyCardChanged(); };
@@ -79,7 +80,7 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        var body = new Grid { Margin = new Thickness(16, 2, 16, 14) };
+        var body = new Grid { Margin = new Thickness(16, 2, 16, 2) };
         Grid.SetRow(body, 1);
         layout.Children.Add(body);
         editor = new NoteEditor(data.Markdown) { ContextMenu = context };
@@ -126,6 +127,17 @@ public sealed class Window2 : Window
     {
         base.OnSourceInitialized(e);
         DesktopIntegration.ConfigureNoteWindow(new WindowInteropHelper(this).Handle);
+        if (MousePassthrough)
+            DesktopIntegration.SetNoteMousePassthrough(new WindowInteropHelper(this).Handle, true);
+    }
+
+    internal void SetMousePassthrough(bool enabled)
+    {
+        if (MousePassthrough == enabled) return;
+        if (enabled) FinishEditing();
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle != IntPtr.Zero) DesktopIntegration.SetNoteMousePassthrough(handle, enabled);
+        MousePassthrough = enabled;
     }
 
     public Brush PaperBrush => (Brush)new BrushConverter().ConvertFromString(Data.Color);
@@ -156,9 +168,25 @@ public sealed class Window2 : Window
             Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
-    private UniformGrid CreateFormattingToolbar()
+    private ScrollViewer CreateFormattingToolbar()
     {
-        var toolbar = new UniformGrid { Rows = 1, Margin = new Thickness(8, 0, 8, 4), Visibility = Visibility.Collapsed };
+        var toolbar = new StackPanel { Orientation = Orientation.Horizontal };
+        var scroller = new ScrollViewer
+        {
+            Content = toolbar, Margin = new Thickness(8, 0, 8, 0), Visibility = Visibility.Collapsed,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            CanContentScroll = false, Focusable = false, Background = Brushes.Transparent,
+            PanningMode = PanningMode.HorizontalOnly
+        };
+        var scrollOffset = 0.0;
+        scroller.ScrollChanged += (_, _) => scrollOffset = scroller.HorizontalOffset;
+        scroller.PreviewMouseWheel += (_, e) =>
+        {
+            scrollOffset = Math.Clamp(scrollOffset - e.Delta / 120.0 * FormatButtonWidth, 0, scroller.ScrollableWidth);
+            scroller.ScrollToHorizontalOffset(scrollOffset);
+            e.Handled = true;
+        };
         var buttonStyle = (Style)FormattingToolbarStyles["FormatButtonStyle"];
         void Add(string text, string hint, Func<NoteEditor.FormattingState, bool?> state,
             Action apply, InlineStyle style = InlineStyle.None)
@@ -172,7 +200,7 @@ public sealed class Window2 : Window
             {
                 if (IsActive && !editor.IsKeyboardFocused) editor.Focus();
                 apply();
-            }, state) { Content = label, ToolTip = hint, Style = buttonStyle };
+            }, state) { Content = label, ToolTip = hint, Style = buttonStyle, Width = FormatButtonWidth };
             System.Windows.Automation.AutomationProperties.SetName(button, hint);
             toolbar.Children.Add(button);
         }
@@ -186,7 +214,7 @@ public sealed class Window2 : Window
         Add("1.", "编号列表（Ctrl+Shift+7）", state => state.Numbers, () => editor.ToggleList(true));
         Add("☑", "待办事项（Ctrl+Shift+9）", state => state.Tasks, editor.ToggleTask);
         Add("</>", "行内代码", state => state.Code, () => editor.ToggleMark(InlineStyle.Code));
-        return toolbar;
+        return scroller;
     }
 
     private void QueueFormattingRefresh()
@@ -202,7 +230,7 @@ public sealed class Window2 : Window
     private void RefreshFormattingToolbar()
     {
         var formatting = editor.ReadFormatting();
-        foreach (FormatButton button in footer.Children) button.UpdateState(formatting);
+        foreach (FormatButton button in ((StackPanel)footer.Content).Children) button.UpdateState(formatting);
     }
 
     private sealed class FormatButton(Action apply, Func<NoteEditor.FormattingState, bool?> state) : ToggleButton
@@ -213,7 +241,7 @@ public sealed class Window2 : Window
 
     private static Button IconButton(string glyph, string hint) => new Button {
         Content=glyph, ToolTip=hint, FontFamily=new FontFamily("Segoe MDL2 Assets"), FontSize=12,
-        Width=28, Height=HeaderHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
+        Width=28, Height=ToolbarHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
         Template=FlatButtonTemplate()
     };
     public static ControlTemplate FlatButtonTemplate()
@@ -231,6 +259,7 @@ public sealed class Window2 : Window
     }
     public void Open(bool edit = false, bool activate = true)
     {
+        if (activate) SetMousePassthrough(false);
         Data.IsOpen = true;
         ShowActivated = activate;
         Show();
