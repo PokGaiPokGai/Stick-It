@@ -114,10 +114,10 @@ public partial class MainWindow : Window
         trayMouseMode.Checked = false;
         Report("游戏鼠标自动穿透已停用：" + error.Message);
     }
-    private void MouseModeClick(object sender, RoutedEventArgs e) => SetMouseMode(AutoMouseMode.IsChecked);
+    private void MouseModeClick(object sender, RoutedEventArgs e) => SetMouseMode(AutoMouseMode.IsChecked == true);
     private void RandomNoteColorClick(object sender, RoutedEventArgs e)
     {
-        var updated = new NoteSettings { RandomNewNoteColor = RandomNoteColor.IsChecked };
+        var updated = new NoteSettings { RandomNewNoteColor = RandomNoteColor.IsChecked == true };
         try
         {
             store.SaveSettings(updated);
@@ -150,7 +150,25 @@ public partial class MainWindow : Window
     {
         if(!exiting && IsVisible) RefreshList();
     }
-    public void ShowLibrary() { ShowInTaskbar=true; Show(); WindowState=WindowState.Normal; Activate(); RefreshList(); }
+    public void ShowLibrary() { ShowSettings(false); ShowInTaskbar=true; Show(); WindowState=WindowState.Normal; Activate(); RefreshList(); }
+    private void ShowSettings(bool showSettings)
+    {
+        NotesPage.Visibility = showSettings ? Visibility.Collapsed : Visibility.Visible;
+        SettingsPage.Visibility = showSettings ? Visibility.Visible : Visibility.Collapsed;
+        BackButton.Visibility = SettingsPage.Visibility;
+        NewNoteButton.Visibility = SettingsButton.Visibility = NotesPage.Visibility;
+        PageTitle.Text = showSettings ? "设置" : "便笺";
+        if (IsActive) (showSettings ? BackButton : SettingsButton).Focus();
+    }
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        base.OnPreviewKeyDown(e);
+        if (!e.Handled && e.Key == Key.Escape && SettingsPage.Visibility == Visibility.Visible)
+        {
+            ShowSettings(false);
+            e.Handled = true;
+        }
+    }
     private void RefreshList()
     {
         if(NoteList==null) return;
@@ -208,7 +226,8 @@ public partial class MainWindow : Window
     private void DragTitle(object sender,MouseButtonEventArgs e) { if(e.ButtonState==MouseButtonState.Pressed) DragMove(); }
     private void NewNoteClick(object sender,RoutedEventArgs e)=>CreateNote();
     private void CloseClick(object sender,RoutedEventArgs e)=>Close();
-    private void SettingsClick(object sender,RoutedEventArgs e) { var button=(Button)sender; button.ContextMenu.PlacementTarget=button; button.ContextMenu.IsOpen=true; }
+    private void SettingsClick(object sender,RoutedEventArgs e)=>ShowSettings(true);
+    private void BackClick(object sender,RoutedEventArgs e)=>ShowSettings(false);
     private void SearchChanged(object sender,TextChangedEventArgs e)=>RefreshList();
     private void OpenCard(object sender,RoutedEventArgs e)=>((Window2)((Button)sender).Tag).Open(edit:true);
     private void DeleteCard(object sender,RoutedEventArgs e) { var menu=(ContextMenu)((MenuItem)sender).Parent; DeleteNote((Window2)((Button)menu.PlacementTarget).Tag); }

@@ -128,6 +128,12 @@ internal sealed partial class NoteEditor
     {
         if (IsReadOnly || runningNativeCommand || e.Command is not RoutedCommand command) return;
 
+        if (MoveBeforeTask(command))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (command == EditingCommands.ToggleBullets || command == EditingCommands.ToggleNumbering)
             ToggleList(command == EditingCommands.ToggleNumbering);
         else if (command == EditingCommands.ToggleBold)
@@ -163,6 +169,28 @@ internal sealed partial class NoteEditor
         else return;
 
         e.Handled = true;
+    }
+
+    private bool MoveBeforeTask(RoutedCommand command)
+    {
+        var extend = command == EditingCommands.SelectLeftByCharacter || command == EditingCommands.SelectLeftByWord;
+        var word = command == EditingCommands.MoveLeftByWord || command == EditingCommands.SelectLeftByWord;
+        if ((!extend && command != EditingCommands.MoveLeftByCharacter && !word) ||
+            (!extend && !Selection.IsEmpty) || CaretPosition.Paragraph is not { } paragraph ||
+            NoteLists.TaskOf(paragraph) is not { } marker || CaretPosition.CompareTo(NoteLists.TextStart(paragraph)) != 0)
+            return false;
+
+        // Skip the non-editable marker when moving left out of a task, so the
+        // gutter protection does not trap navigation at the label start.
+        var previous = marker.ElementStart.GetNextInsertionPosition(LogicalDirection.Backward);
+        if (previous != null)
+        {
+            var anchor = IsBackwardSelection() ? Selection.End : Selection.Start;
+            CaretPosition = previous;
+            if (word) RunNative(EditingCommands.MoveLeftByWord);
+            if (extend) Selection.Select(anchor, CaretPosition);
+        }
+        return true;
     }
 
     private bool CanSplitSelection()

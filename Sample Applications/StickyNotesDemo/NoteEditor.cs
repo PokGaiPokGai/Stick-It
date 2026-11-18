@@ -42,13 +42,22 @@ internal sealed partial class NoteEditor : RichTextBox
         IsReadOnly = true;
         IsDocumentEnabled = true;
         AcceptsTab = true;
+        // RichTextBox binds Ctrl+Space to ResetFormat. Leave the IME toggle
+        // unhandled instead of changing formatting when it reaches the editor.
+        InputBindings.Add(new KeyBinding(ApplicationCommands.NotACommand, Key.Space, ModifierKeys.Control));
         Padding = new Thickness(0);
         BorderThickness = new Thickness(0);
         Background = Brushes.Transparent;
-        VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        // Keep wrapping stable even for a note that only overflows while editing.
+        VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
         Resources.MergedDictionaries.Add(TaskStyles);
         Resources.MergedDictionaries.Add(ScrollBarStyles);
         var scrollStyle = new Style(typeof(ScrollBar), (Style)ScrollBarStyles[typeof(ScrollBar)]);
+        scrollStyle.Triggers.Add(new Trigger
+        {
+            Property = RangeBase.MaximumProperty, Value = 0d,
+            Setters = { new Setter(OpacityProperty, 0d), new Setter(IsHitTestVisibleProperty, false) }
+        });
         scrollStyle.Triggers.Add(new DataTrigger
         {
             Binding = new Binding(nameof(IsReadOnly)) { Source = this }, Value = true,
@@ -78,6 +87,23 @@ internal sealed partial class NoteEditor : RichTextBox
     internal event Action DocumentEdited;
     internal string PlainText => plainText ??= new TextRange(Document.ContentStart, Document.ContentEnd).Text.TrimEnd('\r', '\n');
     internal string Markdown => MarkdownWriter.Write(Document);
+
+    protected override void OnSelectionChanged(RoutedEventArgs e)
+    {
+        // The zero-width task marker is drawn in the gutter. Its leading text
+        // position must never accept label text, even after Home or a mouse hit.
+        // Compare with the marker boundary: WPF can normalize the same insertion
+        // position to either side of a formatting span around the label.
+        if (!IsReadOnly && changeDepth == 0 && Selection.Start.Paragraph is { } paragraph &&
+            NoteLists.TaskOf(paragraph) is { } marker && Selection.Start.CompareTo(marker.ElementEnd) < 0)
+        {
+            var start = NoteLists.TextStart(paragraph);
+            var end = Selection.End.CompareTo(start) < 0 ? start : Selection.End;
+            if (IsBackwardSelection()) Selection.Select(end, start);
+            else Selection.Select(start, end);
+        }
+        base.OnSelectionChanged(e);
+    }
 
     private void TaskChanged(object sender, RoutedEventArgs e)
     {

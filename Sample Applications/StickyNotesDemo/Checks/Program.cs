@@ -39,14 +39,17 @@ internal static partial class Checks
             typeof(InputManager).GetField("_primaryKeyboardDevice", BindingFlags.Instance | BindingFlags.NonPublic)
                 .SetValue(InputManager.Current, offlineKeyboard);
 
-            TestStore(temp); TestSettings(temp); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
+            TestStore(temp); TestSettings(temp, output); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
             TestSessionRestore(temp);
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
+            TestChromeMotion();
             TestTaskCompletion(temp);
+            TestTaskTextLayout(output);
             TestInternalClipboard();
             TestReviewLifecycle(temp);
             TestReadingWheel();
+            TestInputActivation();
             TestNotePreviews(temp, output);
             TestNoteWindowStyles();
             TestGameMousePolicy();
@@ -222,7 +225,7 @@ internal static partial class Checks
         scroller.UpdateLayout();
         Assert(scrollbar.Opacity == 0 && !scrollbar.IsHitTestVisible &&
                scroller.ViewportWidth == viewportWidth && scroller.VerticalOffset == offset,
-            "leaving edit mode hides the scrollbar without moving or reflowing the note");
+            "leaving edit mode keeps the same wrap width and mid-document scroll offset");
         scroller.ScrollToTop();
         Render((FrameworkElement)longNote.Content, 382, 190, Path.Combine(output, "compact-note-reading.png"));
         Invoke(longNote, "BeginEditing");
@@ -240,12 +243,17 @@ internal static partial class Checks
         var readingBounds = BodyBounds();
         Invoke(note,"BeginEditing");
         Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-editing-preview.png"));
-        Assert(BodyBounds() == readingBounds && Math.Abs(readingBounds.Top - (noteHeight - readingBounds.Bottom)) < .01,
-            "showing the toolbar preserves the body bounds and matching top/bottom margins");
+        var editingBounds = BodyBounds();
+        var footerTop = footer.TranslatePoint(new Point(), noteSurface).Y;
+        Assert(readingBounds.Top <= 8 && Math.Abs(readingBounds.Top - (noteHeight - readingBounds.Bottom)) < .01 &&
+               readingBounds.Height - editingBounds.Height >= 40 && readingBounds.Width == editingBounds.Width,
+            "reading reclaims both toolbar strips and keeps a small equal paper inset");
+        Assert(Math.Abs(editingBounds.Bottom - footerTop) < .01 && Math.Abs(editingBounds.Top - (noteHeight - editingBounds.Bottom)) < .01,
+            "editing text uses the whole space between the two toolbars with no extra gap");
         Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
         Invoke(note,"FinishEditing");
         noteSurface.UpdateLayout();
-        Assert(BodyBounds() == readingBounds, "hiding the toolbar keeps the body origin and size");
+        Assert(BodyBounds() == readingBounds, "hiding the toolbars restores the full reading viewport");
         Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
         CheckRichEditing(note, editor, formatBar);
         editor.Document.Blocks.Clear();

@@ -18,7 +18,6 @@ namespace StickyNotesDemo;
 
 public sealed class Window2 : Window
 {
-    private const double ToolbarHeight = 28;
     private const double FormatButtonWidth = 32;
     private static readonly ResourceDictionary FormattingToolbarStyles = new()
     {
@@ -31,12 +30,13 @@ public sealed class Window2 : Window
     public event Action DeleteRequested;
     private readonly NoteEditor editor;
     private readonly Border paper;
-    private readonly Grid header;
+    private readonly NoteChrome chrome;
     private readonly ScrollViewer footer;
     private readonly TextBlock placeholder;
     private DispatcherOperation formattingRefresh;
     private bool disposing;
     private bool editing;
+    private bool resumeEditingOnActivation;
     private int readingWheelDelta;
     internal bool MousePassthrough { get; private set; }
 
@@ -52,17 +52,11 @@ public sealed class Window2 : Window
         WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight=0, ResizeBorderThickness=new Thickness(5), GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(10) });
         paper=new Border { CornerRadius=new CornerRadius(10), Background=PaperBrush, Padding=new Thickness(1) };
         Content=paper;
-        var layout = new Grid();
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
-        layout.RowDefinitions.Add(new RowDefinition());
-        layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(ToolbarHeight) });
-        paper.Child=layout;
         paper.MouseLeftButtonDown += (_, e) => {
-            if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==layout)) DragMove();
+            if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==chrome)) DragMove();
         };
-        header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0), Visibility=Visibility.Collapsed };
+        var header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0) };
         header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState==MouseButtonState.Pressed) DragMove(); };
-        layout.Children.Add(header);
         var close = IconButton("\uE8BB", "收起便签");
         close.HorizontalAlignment = HorizontalAlignment.Right;
         close.VerticalAlignment = VerticalAlignment.Top;
@@ -81,14 +75,12 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        var body = new Grid { Margin = new Thickness(16, 2, 16, 2) };
-        Grid.SetRow(body, 1);
-        layout.Children.Add(body);
+        var body = new Grid();
         editor = new NoteEditor(data.Markdown) { ContextMenu = context };
         body.Children.Add(editor);
         footer = CreateFormattingToolbar();
-        Grid.SetRow(footer, 2);
-        layout.Children.Add(footer);
+        chrome = new NoteChrome(body, editor, header, footer);
+        paper.Child = chrome;
         placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
         body.Children.Add(placeholder);
         UpdatePlaceholder();
@@ -111,12 +103,31 @@ public sealed class Window2 : Window
                     node=node is FrameworkContentElement content ? content.Parent :
                         node is Visual ? VisualTreeHelper.GetParent(node) : null;
                 }
-                BeginEditing();
+                var point = e.GetPosition(editor);
+                var hit = editor.GetPositionFromPoint(point, false);
+                if (hit == null && Data.Markdown.Length != 0 && e.GetPosition(chrome).Y < NoteChrome.BarHeight)
+                {
+                    e.Handled = true;
+                    DragMove();
+                    return;
+                }
+                SetEditing(true, hit?.GetCharacterRect(LogicalDirection.Forward).Bottom);
             }
             QueueFormattingRefresh();
         };
         editor.AddHandler(Hyperlink.RequestNavigateEvent, new RequestNavigateEventHandler(OpenLink));
-        Deactivated += (_, _) => { if (!context.IsOpen) FinishEditing(); };
+        Deactivated += (_, _) =>
+        {
+            var wasEditing = editing;
+            if (!context.IsOpen) FinishEditing();
+            resumeEditingOnActivation = wasEditing;
+        };
+        Activated += (_, _) =>
+        {
+            // The native window can reactivate with its previous keyboard focus
+            // after an input-language popup or switching applications, without a click.
+            if (resumeEditingOnActivation) BeginEditing();
+        };
         context.Closed += (_, _) => {
             if (editing && IsActive) editor.Focus();
             else FinishEditing();
@@ -215,7 +226,7 @@ public sealed class Window2 : Window
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal };
         var scroller = new ScrollViewer
         {
-            Content = toolbar, Margin = new Thickness(8, 0, 8, 0), Visibility = Visibility.Collapsed,
+            Content = toolbar, Margin = new Thickness(8, 0, 8, 0),
             HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             CanContentScroll = false, Focusable = false, Background = Brushes.Transparent,
@@ -283,7 +294,7 @@ public sealed class Window2 : Window
 
     private static Button IconButton(string glyph, string hint) => new Button {
         Content=glyph, ToolTip=hint, FontFamily=new FontFamily("Segoe MDL2 Assets"), FontSize=12,
-        Width=28, Height=ToolbarHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
+        Width=28, Height=NoteChrome.BarHeight, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Focusable=false,
         Template=FlatButtonTemplate()
     };
     public static ControlTemplate FlatButtonTemplate()
@@ -312,29 +323,23 @@ public sealed class Window2 : Window
         Changed?.Invoke();
     }
     private void UpdatePlaceholder() => placeholder.Visibility=!editing && Data.Markdown.Length==0 ? Visibility.Visible : Visibility.Collapsed;
-    private void BeginEditing()
+    private void BeginEditing() => SetEditing(true);
+    private void FinishEditing() => SetEditing(false);
+    private void SetEditing(bool value, double? clickedLineBottom = null, bool animate = true)
     {
-        editing=true;
-        header.Visibility=Visibility.Visible;
-        footer.Visibility = Visibility.Visible;
-        editor.IsReadOnly = false;
-        editor.ClearValue(ContextMenuProperty);
+        resumeEditingOnActivation=false;
+        if (editing == value) return;
+        editing = value;
+        editor.IsReadOnly = !value;
+        if (value) editor.ClearValue(ContextMenuProperty);
+        else editor.ContextMenu = paper.ContextMenu;
+        chrome.SetEditing(value, animate && IsVisible && SystemParameters.ClientAreaAnimation, clickedLineBottom);
         UpdatePlaceholder();
-        RefreshFormattingToolbar();
-    }
-    private void FinishEditing()
-    {
-        if (!editing) return;
-        editing=false;
-        header.Visibility=Visibility.Collapsed;
-        footer.Visibility = Visibility.Collapsed;
-        editor.IsReadOnly = true;
-        editor.ContextMenu = paper.ContextMenu;
-        UpdatePlaceholder();
+        if (value) QueueFormattingRefresh();
     }
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!disposing) { e.Cancel=true; FinishEditing(); Data.IsOpen=false; Hide(); Changed?.Invoke(); }
+        if (!disposing) { e.Cancel=true; SetEditing(false, animate:false); Data.IsOpen=false; Hide(); Changed?.Invoke(); }
         base.OnClosing(e);
     }
     internal void PrepareForShutdown() => disposing = true;
