@@ -1,7 +1,6 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Windows;
 using System.Windows.Interop;
 
 namespace StickyNotesDemo;
@@ -95,14 +94,22 @@ public static class DesktopIntegration
         return new Rect { Left=left, Top=top, Right=left+width, Bottom=top+height };
     }
 
-    public static void PlaceAtCursor(Window window)
+    internal static void PlaceAtCursor(Window2 window)
     {
         if (!GetCursorPos(out var point)) throw new Win32Exception();
+        PlaceAtPoint(window, point);
+    }
+
+    internal static void PlaceAtPoint(Window2 window, Point point)
+    {
         var monitor = MonitorFromPoint(point, 2);
         var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
         if (!GetMonitorInfo(monitor, ref info)) throw new Win32Exception();
         Marshal.ThrowExceptionForHR(GetDpiForMonitor(monitor, 0, out var dpiX, out var dpiY));
-        var bounds = CenteredBounds(point, info.Work, (int)Math.Round(window.Width*dpiX/96), (int)Math.Round(window.Height*dpiY/96));
+        var width = Math.Min((int)Math.Round(window.Width * dpiX / 96), info.Work.Right - info.Work.Left);
+        var display = new NoteDisplay(default, info.Work, dpiY / 96.0);
+        var paperHeight = window.MeasurePaperHeight(width * 96.0 / dpiX, display.AvailablePaperHeight);
+        var bounds = CenteredBounds(point, info.Work, width, (int)Math.Ceiling(paperHeight * display.Scale) + 2 * display.BarPixels);
         var hwnd = new WindowInteropHelper(window).EnsureHandle();
         if (!SetWindowPos(hwnd, new IntPtr(-1), bounds.Left, bounds.Top, bounds.Right-bounds.Left, bounds.Bottom-bounds.Top, 0x10))
             throw new Win32Exception();
@@ -117,23 +124,44 @@ public static class DesktopIntegration
         return CenteredBounds(new Point { X = bounds.Left + width / 2, Y = bounds.Top + height / 2 }, work, width, height);
     }
 
-    internal static bool ContainsWheelPoint(IntPtr window, IntPtr position)
+    internal static System.Windows.Point PointInWindow(IntPtr window, IntPtr position)
     {
         if (!GetWindowRect(window, out var bounds)) throw new Win32Exception();
         var x = unchecked((short)position.ToInt64());
         var y = unchecked((short)(position.ToInt64() >> 16));
-        return x >= bounds.Left && x < bounds.Right && y >= bounds.Top && y < bounds.Bottom;
+        var scale = GetDpiForWindow(window) / 96.0;
+        return new System.Windows.Point((x - bounds.Left) / scale, (y - bounds.Top) / scale);
     }
 
-    internal static void EnsureVisible(Window window)
+    internal readonly record struct NoteDisplay(Rect Bounds, Rect Work, double Scale)
     {
-        var handle = new WindowInteropHelper(window).EnsureHandle();
+        internal double Width => (Bounds.Right - Bounds.Left) / Scale;
+        internal int BarPixels => Math.Min((int)Math.Round(NoteChrome.BarHeight * Scale), (Work.Bottom - Work.Top - 1) / 2);
+        internal double AvailablePaperHeight => (Work.Bottom - Work.Top - 2 * BarPixels) / Scale;
+
+        internal Rect FitWindow(double desiredHeight, int preferredTop)
+        {
+            // Both modes share one paper rectangle. Even against a monitor edge,
+            // opening a toolbar never needs to push or scroll the document.
+            int space = BarPixels, topLimit = Work.Top + space, bottomLimit = Work.Bottom - space;
+            var height = (int)Math.Min(bottomLimit - topLimit, Math.Ceiling(desiredHeight * Scale));
+            var top = Math.Clamp(preferredTop, topLimit, bottomLimit - height);
+            return new Rect { Left = Bounds.Left, Right = Bounds.Right, Top = top - space, Bottom = top + height + space };
+        }
+    }
+
+    internal static NoteDisplay GetNoteDisplay(IntPtr handle)
+    {
         if (!GetWindowRect(handle, out var bounds)) throw new Win32Exception();
         var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
         if (!GetMonitorInfo(MonitorFromRect(ref bounds, 2), ref info)) throw new Win32Exception();
-        var visible = VisibleBounds(bounds, info.Work);
-        if (!visible.Equals(bounds) && !SetWindowPos(handle, IntPtr.Zero, visible.Left, visible.Top,
-                visible.Right - visible.Left, visible.Bottom - visible.Top, 0x4 | 0x10)) // NOZORDER | NOACTIVATE
-            throw new Win32Exception();
+        return new NoteDisplay(bounds, info.Work, GetDpiForWindow(handle) / 96.0);
     }
+
+    internal static void SetNoteBounds(IntPtr handle, Rect bounds)
+    {
+        if (!SetWindowPos(handle, IntPtr.Zero, bounds.Left, bounds.Top, bounds.Right - bounds.Left,
+                bounds.Bottom - bounds.Top, 0x4 | 0x10)) throw new Win32Exception(); // NOZORDER | NOACTIVATE
+    }
+
 }

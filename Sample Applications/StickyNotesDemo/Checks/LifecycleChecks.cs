@@ -59,11 +59,11 @@ internal static partial class Checks
         var note = new Window2(new NoteData { Left = -20000, Top = -20000 });
         try
         {
-            DesktopIntegration.EnsureVisible(note);
+            Invoke(note, "FitContentHeight", true);
             var handle = new WindowInteropHelper(note).Handle;
             Assert(GetNoteBounds(handle, out var bounds) && bounds.Left != -20000 && bounds.Top != -20000,
                 "native recovery relocates a saved note outside all monitors");
-            DesktopIntegration.EnsureVisible(note);
+            Invoke(note, "FitContentHeight", true);
             Assert(GetNoteBounds(handle, out var unchanged) && unchanged.Equals(bounds) && !IsWindowVisible(handle) && GetForegroundWindow() == foreground,
                 "rechecking recovered bounds keeps the note hidden and does not activate it");
         }

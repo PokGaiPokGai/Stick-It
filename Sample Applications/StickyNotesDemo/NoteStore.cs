@@ -10,7 +10,6 @@ namespace StickyNotesDemo;
 
 public sealed class NoteData
 {
-    private const double DefaultSide = 320;
     internal const string DefaultColor = "#FFF7C2";
     internal static readonly string[] Colors = [DefaultColor, "#E2F1FF", "#F5E0F0", "#E4F2D5", "#EEE8FB", "#F0F0F0"];
 
@@ -20,8 +19,10 @@ public sealed class NoteData
     public DateTime Modified { get; set; } = DateTime.Now;
     public double Left { get; set; } = 100;
     public double Top { get; set; } = 100;
-    public double Width { get; set; } = DefaultSide;
-    public double Height { get; set; } = DefaultSide;
+    public double Width { get; set; } = 320;
+    // Cached reading height. Older files may contain the entire window height;
+    // opening always measures the document at its current width.
+    public double Height { get; set; } = 320;
     public bool IsOpen { get; set; } = true;
 }
 
@@ -66,7 +67,7 @@ public sealed class NoteStore
             foreach (var note in notes)
                 if (note == null || note.Markdown == null || !ids.Add(note.Id) ||
                     !double.IsFinite(note.Left) || !double.IsFinite(note.Top) ||
-                    !double.IsFinite(note.Width) || !double.IsFinite(note.Height) || note.Width < 160 || note.Height < 120 ||
+                    !double.IsFinite(note.Width) || !double.IsFinite(note.Height) || note.Width < 160 || note.Height <= 0 ||
                     note.Color == null || note.Color.Length != 7 || note.Color[0] != '#' ||
                     !int.TryParse(note.Color.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _))
                     throw new InvalidDataException("便签数据格式不正确。");

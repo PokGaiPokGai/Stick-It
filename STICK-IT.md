@@ -12,8 +12,9 @@ A Windows desktop sticky-note application forked from Microsoft's MIT-licensed W
 - Click the tray icon to open the library. Its menu includes new note and save/exit.
 - The library gear opens an in-window settings page with switches, shortcut help, save and exit actions. Use the back arrow or Esc to return to the existing note list and search; opening the library from the tray returns to the list.
 - The library settings include **新建便签随机颜色**, enabled by default. New notes randomly use one of the existing six paper colors; disabling it restores yellow for new notes. This preference is saved in `settings.json` beside the note store and never recolors existing notes.
-- New notes start as 320 × 320 squares and open on top. Click the body to edit. The close button and formatting toolbar slide in at the top and bottom. Text moves with the bars and uses the full space between them. Reading mode reclaims both strips, leaving a 6-DIP inset inside the paper border. The slide follows the Windows animation setting. Drag the empty top area or the paper margin to move a note. Right-click the paper to change its color or delete it.
-- Notes and the library use slim gray scrollbars with transparent tracks and no arrow buttons. Notes show their scrollbar only while editing, keeping the same text width and scroll position when it disappears. Hovering or dragging widens and darkens the thumb; wheel, thumb dragging and track paging remain available.
+- Notes open on top at a default width of 320 DIPs. Drag a side to change the width. The height follows the rendered text as you type, delete, paste, or change the wrapping. A note near the bottom grows upward to use the current monitor's work area and returns toward its chosen position when shortened.
+- Click the body to edit. The note is one solid rounded rectangle. Its upper and lower edges expand outward with the close button and formatting controls, keeping the text and its scroll position fixed. Both edges retract when editing ends. The transparent area beyond the paper lets the pointer reach the application underneath. The slide follows the Windows animation setting. Drag the empty top area or the paper margin to move a note. Right-click the paper to change its color or delete it.
+- The editing scrollbar appears when the text and toolbars exceed the monitor's usable height. Long reading notes support wheel scrolling with their scrollbar hidden. Notes and the library use slim gray scrollbars with transparent tracks.
 - Hover over a pinned note to scroll its content with the wheel without entering edit mode or showing its scrollbar. Reading mode also accepts native wheel messages for inactive notes; game mouse passthrough leaves wheel input to the game. Wheel distance follows the Windows line/page setting.
 - An editing note resumes editing when its window regains activation, preserving its document and caret after input-language popups or application switches. Reading notes stay read-only, and closing a note or entering game passthrough cancels that restoration.
 - **Ctrl + Space** is reserved for the input method rather than the native rich-text reset-format command, so switching input mode does not clear character formatting.
@@ -52,6 +53,12 @@ dotnet run --no-restore --project "Sample Applications/StickyNotesDemo/Checks/Ch
 ```
 
 The checks use isolated temporary files and a unique mutex/event namespace. They cover process exclusion, activation signals, owner exit/crash, cursor placement calculations, persistence, legacy import, Markdown, search, and close-to-hide. Editor checks send WPF events within the test process and verify rapid typing, heading resets, list selections, nesting, undo/redo, and note storage. They also measure list alignment and spacing in offscreen WPF renders. Native-window checks create hidden handles to verify tool-window classification, transparency, topmost state and activation flags. The tests run without showing windows, starting a tray icon, registering a hotkey, or using desktop input. Alt+Tab and Win+Tab visibility still require checking in the target Windows shell.
+
+To check the actual note height, paste and undo behavior, and the scrollbar threshold in native windows, run the following on Windows. It creates a separate desktop and verifies that the desktop does not receive user input before opening its test windows.
+
+```powershell
+dotnet run --no-restore --project "Sample Applications/StickyNotesDemo/Checks/Checks.csproj" -- fit-window
+```
 
 ## Game mouse preview validation
 

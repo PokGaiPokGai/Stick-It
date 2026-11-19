@@ -132,8 +132,7 @@ public partial class MainWindow : Window
     private void CreateNote()
     {
         var note=AddNote(settings.CreateNote(Random.Shared));
-        DesktopIntegration.PlaceAtCursor(note);
-        note.Open(edit:true);
+        note.Open(edit:true, atCursor:true);
         OnNotesChanged();
     }
     private void OnNotesChanged()

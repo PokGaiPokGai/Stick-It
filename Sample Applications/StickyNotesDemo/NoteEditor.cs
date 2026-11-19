@@ -18,6 +18,8 @@ internal sealed partial class NoteEditor : RichTextBox
 {
     private const string Backtick = "\u0060";
     private const string FormattedNoteClipboard = "StickIt.Markdown";
+    internal static readonly DependencyProperty FitsWorkAreaProperty =
+        DependencyProperty.Register("FitsWorkArea", typeof(bool), typeof(NoteEditor));
     private static readonly ResourceDictionary TaskStyles = new()
     {
         Source = new Uri("pack://application:,,,/Stick It;component/Assets/TaskStyles.xaml")
@@ -48,7 +50,7 @@ internal sealed partial class NoteEditor : RichTextBox
         Padding = new Thickness(0);
         BorderThickness = new Thickness(0);
         Background = Brushes.Transparent;
-        // Keep wrapping stable even for a note that only overflows while editing.
+        // The scrollbar gutter stays the same width when the thumb is hidden.
         VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
         Resources.MergedDictionaries.Add(TaskStyles);
         Resources.MergedDictionaries.Add(ScrollBarStyles);
@@ -58,12 +60,15 @@ internal sealed partial class NoteEditor : RichTextBox
             Property = RangeBase.MaximumProperty, Value = 0d,
             Setters = { new Setter(OpacityProperty, 0d), new Setter(IsHitTestVisibleProperty, false) }
         });
-        scrollStyle.Triggers.Add(new DataTrigger
+        // Suppress the thumb while a fitting window grows to its new height.
+        foreach (var property in new[] { IsReadOnlyProperty, FitsWorkAreaProperty })
         {
-            Binding = new Binding(nameof(IsReadOnly)) { Source = this }, Value = true,
-            // Keep the gutter reserved so entering edit mode does not reflow text.
-            Setters = { new Setter(OpacityProperty, 0d), new Setter(IsHitTestVisibleProperty, false) }
-        });
+            scrollStyle.Triggers.Add(new DataTrigger
+            {
+                Binding = new Binding { Path = new PropertyPath(property), Source = this }, Value = true,
+                Setters = { new Setter(OpacityProperty, 0d), new Setter(IsHitTestVisibleProperty, false) }
+            });
+        }
         Resources.Add(typeof(ScrollBar), scrollStyle);
         TextChanged += (_, e) =>
         {

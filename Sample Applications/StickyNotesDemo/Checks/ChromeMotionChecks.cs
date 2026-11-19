@@ -7,25 +7,24 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using StickyNotesDemo;
 
 internal static partial class Checks
 {
-    private static Storyboard Slide(NoteChrome chrome) => (Storyboard)typeof(NoteChrome)
+    private static AnimationClock Slide(NoteChrome chrome) => (AnimationClock)typeof(NoteChrome)
         .GetField("transition", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(chrome);
 
-    private static void Sample(NoteChrome chrome, Storyboard slide, double fraction)
+    private static void Sample(NoteChrome chrome, AnimationClock slide, double fraction)
     {
-        slide.SeekAlignedToLastTick(chrome, slide.Duration.TimeSpan * fraction, TimeSeekOrigin.BeginTime);
+        slide.Controller.SeekAlignedToLastTick(slide.Timeline.Duration.TimeSpan * fraction, TimeSeekOrigin.BeginTime);
         chrome.UpdateLayout();
     }
 
-    private static void EndSlide(NoteChrome chrome, Storyboard slide)
+    private static void EndSlide(NoteChrome chrome, AnimationClock slide)
     {
-        slide.SkipToFill(chrome);
-        // Process the completion callback, including cleanup and the native scroll
-        // viewport change, just as the application dispatcher would.
+        slide.Controller.SkipToFill();
         var frame = new DispatcherFrame();
         var timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(5) };
         var start = Stopwatch.StartNew();
@@ -44,137 +43,128 @@ internal static partial class Checks
         var note = new Window2(new NoteData { Markdown = markdown });
         try
         {
-            var paper = (Border)note.Content;
-            var chrome = (NoteChrome)paper.Child;
+            var chrome = (NoteChrome)note.Content;
             var editor = Find<RichTextBox>(chrome);
             var body = (Grid)VisualTreeHelper.GetParent(editor);
-            var footer = FormattingScroller(note);
-            var header = (Grid)chrome.Children[1];
             body.Children.Remove(editor);
             var probe = new LayoutProbe { Child = editor };
             body.Children.Insert(0, probe);
-            void SizePaper(double w, double h)
-            {
-                paper.Measure(new Size(w, h));
-                paper.Arrange(new Rect(0, 0, w, h));
-                paper.UpdateLayout();
-            }
-            SizePaper(320, 190);
-            var document = editor.Document;
+            var footer = FormattingScroller(note);
+            var header = Find<Button>(chrome).Parent as Grid;
+            var doc = editor.Document;
             int changes = 0;
             editor.TextChanged += (_, _) => changes++;
-            var first = document.Blocks.FirstBlock.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
-            double Y(FrameworkElement e) => e.TranslatePoint(new Point(), paper).Y;
-            double GlyphY(TextPointer p) => editor.TranslatePoint(p.GetCharacterRect(LogicalDirection.Forward).Location, paper).Y;
-            var firstY = GlyphY(first);
-            var readHeight = editor.ViewportHeight;
-            var readWidth = editor.ViewportWidth;
 
+            const int width = 320, paperHeight = 190;
+            var size = new Size(width, paperHeight + 2 * chrome.SlotHeight);
+            chrome.Measure(size);
+            chrome.Arrange(new Rect(size));
+            chrome.UpdateLayout();
+            double Y(FrameworkElement e) => e.TranslatePoint(new Point(), chrome).Y - chrome.SlotHeight;
+            double GlyphY(TextPointer p) => editor.TranslatePoint(p.GetCharacterRect(LogicalDirection.Forward).Location, body).Y + Y(body);
+            var first = doc.Blocks.FirstBlock.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+            var firstY = GlyphY(first);
+            var viewport = new Size(editor.ViewportWidth, editor.ViewportHeight);
+
+            // Compare every alpha value with a single rounded rectangle. Checking
+            // just the top and bottom pixels misses a gap or a notch at either seam.
+            byte[] bodyPixels = null;
+            (int Top, int Bottom) PaintedEdges()
+            {
+                var h = (int)chrome.ActualHeight;
+                var picture = new RenderTargetBitmap(width, h, 96, 96, PixelFormats.Pbgra32);
+                picture.Render(chrome);
+                int stride = width * 4, top = (int)chrome.SlotHeight;
+                var pixels = new byte[stride * h];
+                picture.CopyPixels(pixels, stride, 0);
+                var shape = new DrawingVisual();
+                using (var dc = shape.RenderOpen()) dc.DrawRoundedRectangle(chrome.Background, null, chrome.SurfaceBounds, NoteChrome.Corner, NoteChrome.Corner);
+                var expected = new RenderTargetBitmap(width, h, 96, 96, PixelFormats.Pbgra32);
+                expected.Render(shape);
+                var mask = new byte[pixels.Length];
+                expected.CopyPixels(mask, stride, 0);
+                for (int i = 3; i < mask.Length; i += 4)
+                    if (Math.Abs(mask[i] - pixels[i]) > 1)
+                        throw new Exception($"Broken paper silhouette at ({i / 4 % width}, {i / stride}): alpha {pixels[i]} vs {mask[i]}.");
+                foreach (var x in new[] { 4, width - 5 })
+                    for (int y = 0; y < h; y++)
+                    {
+                        int i = y * stride + x * 4;
+                        if (mask[i + 3] == 255 && !pixels.AsSpan(i, 4).SequenceEqual(mask.AsSpan(i, 4)))
+                            throw new Exception($"The sheet changed color at ({x}, {y}).");
+                    }
+                var text = new byte[(width - 36) * 4 * (paperHeight - 14)];
+                picture.CopyPixels(new Int32Rect(17, top + 7, width - 36, paperHeight - 14), text, (width - 36) * 4, 0);
+                bodyPixels ??= text;
+                if (!text.SequenceEqual(bodyPixels)) throw new Exception("A text pixel changed during the toolbar transition.");
+                var opaque = Enumerable.Range(0, h).Where(y => pixels[y * stride + width / 2 * 4 + 3] > 127);
+                return (opaque.First() - top, opaque.Last() - top);
+            }
+
+            var closedEdges = PaintedEdges();
             chrome.SetEditing(true, true);
             var opening = Slide(chrome);
             Sample(chrome, opening, 0);
             var before = (probe.Measures, probe.Arranges);
-            double previousText = firstY, previousTop = Y(header), previousBottom = Y(footer);
-            var elapsed = Stopwatch.StartNew();
+            var initial = PaintedEdges();
+            Assert(initial == closedEdges && Math.Abs(GlyphY(first) - firstY) < .01, "the opening frame paints only the original paper at the original coordinates");
+            double lastTop = Y(header), lastBottom = Y(footer);
+            var lastEdges = initial;
             for (int i = 1; i <= 8; i++)
             {
                 Sample(chrome, opening, i / 10.0);
-                var glyph = GlyphY(first);
-                if (glyph <= previousText || Y(header) <= previousTop || Y(footer) >= previousBottom)
-                    throw new Exception($"Opening frame {i}: text {previousText:F2} to {glyph:F2}, header {previousTop:F2} to {Y(header):F2}, footer {previousBottom:F2} to {Y(footer):F2}.");
-                (previousText, previousTop, previousBottom) = (glyph, Y(header), Y(footer));
+                var edges = PaintedEdges();
+                if (Y(header) >= lastTop || Y(footer) <= lastBottom || edges.Top >= lastEdges.Top || edges.Bottom <= lastEdges.Bottom ||
+                    Math.Abs(GlyphY(first) - firstY) >= .01)
+                    throw new Exception($"Outward frame {i}: edges {lastEdges} to {edges}, glyph {firstY:F2} to {GlyphY(first):F2}.");
+                (lastTop, lastBottom, lastEdges) = (Y(header), Y(footer), edges);
             }
-            Console.WriteLine($"Long-note toolbar slide: {markdown.Length:N0} characters, 8 sampled frames in {elapsed.Elapsed.TotalMilliseconds:F1} ms; editor measures={probe.Measures-before.Measures}, arranges={probe.Arranges-before.Arranges}.");
-            Assert((probe.Measures, probe.Arranges) == before && editor.ViewportHeight == readHeight,
-                "animating a long note moves real glyphs and both bars without measuring or arranging the editor per frame");
+            Assert((probe.Measures, probe.Arranges) == before && editor.ViewportHeight == viewport.Height,
+                $"one gapless rounded sheet expands over eight frames with identical text pixels and zero editor layout passes on {markdown.Length:N0} characters");
 
             chrome.SetEditing(false, true);
             var closing = Slide(chrome);
             Sample(chrome, closing, 0);
-            Assert(Math.Abs(GlyphY(first) - previousText) < 0.1 && Math.Abs(Y(header) - previousTop) < 0.1 &&
-                   Math.Abs(Y(footer) - previousBottom) < 0.1 && !footer.IsHitTestVisible,
-                "reversing mid-slide continues from the displayed positions and releases toolbar mouse input");
-            Sample(chrome, closing, 0.5);
-            Assert(GlyphY(first) < previousText && GlyphY(first) > firstY && Y(header) < previousTop && Y(footer) > previousBottom,
-                "closing moves text upward and both toolbars outward before hiding them");
-            var middleY = GlyphY(first);
-            var footerInset = paper.ActualHeight - Y(footer);
-            SizePaper(360, 230);
-            Assert(Math.Abs(GlyphY(first) - middleY) < 0.1 && Math.Abs(paper.ActualHeight - Y(footer) - footerInset) < 0.1,
-                "resizing during a slide keeps the same text position and footer distance from the paper edge");
+            Assert(PaintedEdges() == lastEdges && Math.Abs(Y(header) - lastTop) < .01 && Math.Abs(Y(footer) - lastBottom) < .01 &&
+                   !footer.IsHitTestVisible, "reversing the slide preserves both displayed edges and releases the buttons");
+            Sample(chrome, closing, .5);
+            var middle = PaintedEdges();
+            Assert(middle.Top > lastEdges.Top && middle.Bottom < lastEdges.Bottom && Math.Abs(GlyphY(first) - firstY) < .01,
+                "closing retracts the upper strip down and the lower strip up while the text stays still");
+            Sample(chrome, closing, .999);
+            var lastFrame = PaintedEdges();
             EndSlide(chrome, closing);
-            Assert(footer.Visibility == Visibility.Collapsed && Math.Abs(GlyphY(first) - firstY) < 0.1,
-                "the finished reading state reclaims both strips without a stale opening callback");
+            Assert(lastFrame == closedEdges && PaintedEdges() == closedEdges && Math.Abs(GlyphY(first) - firstY) < .01 &&
+                   !chrome.BarsVisible, "the final animation frame and the compact window paint the same edges and glyph");
+            chrome.SetEditing(true, false);
+            _ = PaintedEdges();
+            chrome.SetEditing(false, false);
+            Assert(PaintedEdges() == closedEdges, "the full editing and compact reading silhouettes are also continuous with animations off");
 
-            SizePaper(320, 190);
-            var last = document.Blocks.LastBlock.ContentEnd.GetInsertionPosition(LogicalDirection.Backward)
-                .GetNextInsertionPosition(LogicalDirection.Backward);
-            // WPF formats long documents incrementally. Materialize the final
-            // line before testing a viewport that has actually reached it.
+            var last = doc.Blocks.LastBlock.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
             _ = GlyphY(last);
-            paper.UpdateLayout();
+            chrome.UpdateLayout();
             editor.ScrollToEnd();
-            paper.UpdateLayout();
-            var readLastY = GlyphY(last);
-            Assert(readLastY > 0 && readLastY < paper.ActualHeight, "the stress note is scrolled to its actual final line before testing bottom anchoring");
-            chrome.SetEditing(true, true);
-            opening = Slide(chrome);
-            Sample(chrome, opening, 0.995);
-            var beforeCommit = GlyphY(last);
-            EndSlide(chrome, opening);
-            var editLastY = GlyphY(last);
-            Assert(Math.Abs(editLastY - beforeCommit) < 1 && Math.Abs(readHeight - editor.ViewportHeight - 44) < 0.1 &&
-                   editor.ViewportWidth == readWidth && Math.Abs(editor.ExtentHeight - editor.ViewportHeight - editor.VerticalOffset) < 1,
-                $"the last line glides to the editing footer and stays reachable (last={beforeCommit:F1}/{editLastY:F1}, height={editor.ViewportHeight}, extent={editor.ExtentHeight}, scroll={editor.VerticalOffset}, width={editor.ViewportWidth})");
-            chrome.SetEditing(false, true);
-            closing = Slide(chrome);
-            Sample(chrome, closing, 0);
-            Assert(Math.Abs(GlyphY(last) - editLastY) < 1, "expanding a bottom-scrolled document starts from its displayed last line");
-            Sample(chrome, closing, 0.5);
-            var halfY = GlyphY(last);
-            EndSlide(chrome, closing);
-            Assert(halfY > editLastY && halfY < readLastY && Math.Abs(GlyphY(last) - readLastY) < 1,
-                $"at the end of a long note the last line follows the retreating footer (edit={editLastY:F1}, mid={halfY:F1}, read={readLastY:F1})");
-            Assert(ReferenceEquals(editor.Document, document) && changes == 0 && note.Data.Markdown == markdown && !note.IsVisible,
-                "toolbar transitions keep the original long document, saved text and desktop untouched");
-        }
-        finally { note.DisposeWindow(); }
-
-        TestNoteAtOverflowThreshold();
-    }
-
-    private static void TestNoteAtOverflowThreshold()
-    {
-        var note = new Window2(new NoteData { Markdown = string.Join("\n", Enumerable.Range(1, 9).Select(i => $"第 {i} 行")) });
-        try
-        {
-            var paper = (Border)note.Content;
-            var chrome = (NoteChrome)paper.Child;
-            var editor = Find<RichTextBox>(chrome);
-            paper.Measure(new Size(320, 190));
-            paper.Arrange(new Rect(0, 0, 320, 190));
-            paper.UpdateLayout();
-            var scroller = Find<ScrollViewer>(editor);
-            var width = editor.ViewportWidth;
-            var last = editor.Document.Blocks.LastBlock.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
-            Rect LastLine() => last.GetCharacterRect(LogicalDirection.Backward);
-            var hitPoint = LastLine().Location + new Vector(-1, 3);
-            var hit = editor.GetPositionFromPoint(hitPoint, false);
-            Assert(scroller.ScrollableHeight == 0 && hit != null, "the last line is clickable in a reading note that just fits");
-            editor.IsReadOnly = false;
-            chrome.SetEditing(true, true, hit.GetCharacterRect(LogicalDirection.Forward).Bottom);
-            editor.CaretPosition = hit;
-            var slide = Slide(chrome);
-            Sample(chrome, slide, 0);
-            Assert(Math.Abs(LastLine().Left - hitPoint.X - 1) < 0.1, "the opening frame preserves the clicked text position");
-            Sample(chrome, slide, 0.995);
-            double LineBottom() => editor.TranslatePoint(LastLine().BottomLeft, paper).Y;
-            var beforeCommit = LineBottom();
-            EndSlide(chrome, slide);
-            var footer = FormattingScroller(note);
-            Assert(scroller.ScrollableHeight > 0 && editor.ViewportWidth == width &&
-                   Math.Abs(LineBottom() - beforeCommit) < 1 && LineBottom() <= footer.TranslatePoint(new Point(), paper).Y + 1,
-                $"a note that only overflows while editing keeps its wrap and clicked line above the toolbar (before={beforeCommit:F1}, after={LineBottom():F1})");
+            chrome.UpdateLayout();
+            var lastY = GlyphY(last);
+            var offset = editor.VerticalOffset;
+            Assert(offset > 0 && lastY >= 0 && lastY < paperHeight, "the long document is scrolled to its actual last line");
+            foreach (var editing in new[] { true, false })
+            {
+                chrome.SetEditing(editing, true);
+                var slide = Slide(chrome);
+                foreach (var t in new[] { 0, .3, .6, .995 })
+                {
+                    Sample(chrome, slide, t);
+                    if (Math.Abs(GlyphY(last) - lastY) >= .01 || editor.VerticalOffset != offset) throw new Exception("The last line or scroll offset moved.");
+                }
+                EndSlide(chrome, slide);
+                Assert(Math.Abs(GlyphY(last) - lastY) < .01 && editor.VerticalOffset == offset &&
+                       editor.ViewportHeight == viewport.Height && editor.ViewportWidth == viewport.Width,
+                    $"the last line, scroll offset and available text area stay fixed with editing={editing}");
+            }
+            Assert(ReferenceEquals(editor.Document, doc) && changes == 0 && note.Data.Markdown == markdown && !note.IsVisible,
+                "toolbar transitions preserve the same formatted document and saved text");
         }
         finally { note.DisposeWindow(); }
     }

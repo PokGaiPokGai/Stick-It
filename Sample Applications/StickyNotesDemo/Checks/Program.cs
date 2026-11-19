@@ -22,6 +22,7 @@ internal static partial class Checks
     static void Assert(bool value,string message) { if(!value) throw new Exception(message); Console.WriteLine("PASS "+message); }
     [STAThread] static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "fit-window") return CheckFittedWindow();
         if (args.Length > 0 && args[0] is "contender" or "startup-contender")
         {
             using var other = new SingleInstance(args[1], activateExisting: args[0] == "contender");
@@ -40,6 +41,7 @@ internal static partial class Checks
                 .SetValue(InputManager.Current, offlineKeyboard);
 
             TestStore(temp); TestSettings(temp, output); TestMarkdown(); TestWindows(temp,output); TestEditorBlocks(temp, output); TestFormattingToolbar(output);
+            TestFittedBounds(temp, output);
             TestSessionRestore(temp);
             TestMarkdownPaste(temp);
             TestLongNoteMovement(temp);
@@ -182,27 +184,28 @@ internal static partial class Checks
         Invoke(main,"AddNote",new NoteData { Markdown="随手记录一个想法",Modified=DateTime.Today.AddHours(2).AddMinutes(43) });
         Invoke(main,"RefreshList");
         Assert(!note.ShowInTaskbar && main.ShowInTaskbar,"only library window participates in taskbar");
-        Assert(note.Topmost && note.Background==Brushes.Transparent && ((Border)note.Content).Background is SolidColorBrush,"previously unpinned note stays on top and uses solid rounded paper");
+        Assert(note.Topmost && note.Background==Brushes.Transparent && ((NoteChrome)note.Content).Background is SolidColorBrush,"previously unpinned note stays on top and uses solid rounded paper");
         var noteWidth = (int)note.Width;
-        var noteHeight = (int)note.Height;
-        Assert(noteWidth == 320 && noteHeight == 320, "default note opens as a 320 by 320 square");
+        const int noteHeight = 320; // Fixed canvas for the control-layout comparisons below.
+        const int hostHeight = noteHeight + 2 * (int)NoteChrome.BarHeight;
+        Assert(noteWidth == 320, "new notes start at a 320-unit width");
         var noteSurface = (FrameworkElement)note.Content;
         Render((FrameworkElement)main.Content,478,720,Path.Combine(output,"library-preview.png"));
-        Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-preview.png"));
+        Render(noteSurface,noteWidth,hostHeight,Path.Combine(output,"note-preview.png"));
         var tasks = new Window2(new NoteData { Markdown = "## 今日待办\n\n- [ ] 整理设计参考\n- [x] 保存便签改动" });
         Render((FrameworkElement)tasks.Content, (int)tasks.Width, (int)tasks.Height, Path.Combine(output, "tasks-preview.png"));
         var longNote = new Window2(new NoteData
         {
-            Markdown = "## 长便签\n\n" + string.Join("\n", Enumerable.Range(1, 24).Select(i => $"- 第 {i} 项：记录需要处理的事情"))
+            Markdown = "## 长便签\n\n" + string.Join("\n", Enumerable.Range(1, 60).Select(i => $"- 第 {i} 项：记录需要处理的事情"))
         });
-        Render((FrameworkElement)longNote.Content, 320, 320, Path.Combine(output, "scrollbar-reading-preview.png"));
+        Render((FrameworkElement)longNote.Content, 320, hostHeight, Path.Combine(output, "scrollbar-reading-preview.png"));
         var scroller = Find<ScrollViewer>((DependencyObject)longNote.Content);
         var scrollbar = (ScrollBar)scroller.Template.FindName("PART_VerticalScrollBar", scroller);
         var viewportWidth = scroller.ViewportWidth;
         Assert(scrollbar.Opacity == 0 && !scrollbar.IsHitTestVisible,
             "inactive notes hide the scrollbar and its mouse target");
         Invoke(longNote, "BeginEditing");
-        Render((FrameworkElement)longNote.Content, 320, 320, Path.Combine(output, "scrollbar-preview.png"));
+        Render((FrameworkElement)longNote.Content, 320, hostHeight, Path.Combine(output, "scrollbar-preview.png"));
         Assert(scrollbar.Opacity == 1 && scrollbar.IsHitTestVisible && scroller.ViewportWidth == viewportWidth,
             "editing reveals the scrollbar without changing the text viewport width");
         var track = (Track)scrollbar.Template.FindName("PART_Track", scrollbar);
@@ -227,9 +230,9 @@ internal static partial class Checks
                scroller.ViewportWidth == viewportWidth && scroller.VerticalOffset == offset,
             "leaving edit mode keeps the same wrap width and mid-document scroll offset");
         scroller.ScrollToTop();
-        Render((FrameworkElement)longNote.Content, 382, 190, Path.Combine(output, "compact-note-reading.png"));
+        Render((FrameworkElement)longNote.Content, 382, 190 + 2 * (int)NoteChrome.BarHeight, Path.Combine(output, "compact-note-reading.png"));
         Invoke(longNote, "BeginEditing");
-        Render((FrameworkElement)longNote.Content, 382, 190, Path.Combine(output, "compact-note-editing.png"));
+        Render((FrameworkElement)longNote.Content, 382, 190 + 2 * (int)NoteChrome.BarHeight, Path.Combine(output, "compact-note-editing.png"));
         longNote.DisposeWindow();
         var search=(TextBox)main.FindName("SearchBox"); search.Text="fork";
         var list=(ItemsControl)main.FindName("NoteList");
@@ -242,19 +245,17 @@ internal static partial class Checks
         Rect BodyBounds() => new Rect(body.TranslatePoint(new Point(), noteSurface), body.RenderSize);
         var readingBounds = BodyBounds();
         Invoke(note,"BeginEditing");
-        Render(noteSurface,noteWidth,noteHeight,Path.Combine(output,"note-editing-preview.png"));
+        Render(noteSurface,noteWidth,hostHeight,Path.Combine(output,"note-editing-preview.png"));
         var editingBounds = BodyBounds();
         var footerTop = footer.TranslatePoint(new Point(), noteSurface).Y;
-        Assert(readingBounds.Top <= 8 && Math.Abs(readingBounds.Top - (noteHeight - readingBounds.Bottom)) < .01 &&
-               readingBounds.Height - editingBounds.Height >= 40 && readingBounds.Width == editingBounds.Width,
-            "reading reclaims both toolbar strips and keeps a small equal paper inset");
-        Assert(Math.Abs(editingBounds.Bottom - footerTop) < .01 && Math.Abs(editingBounds.Top - (noteHeight - editingBounds.Bottom)) < .01,
-            "editing text uses the whole space between the two toolbars with no extra gap");
-        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Visible, "editing keeps the formatted document and shows bottom tools");
+        Assert(readingBounds.Top == NoteChrome.BarHeight + 7 && readingBounds.Top == hostHeight - readingBounds.Bottom &&
+               readingBounds == editingBounds, "the paper keeps the same text rectangle and equal insets in both modes");
+        Assert(footerTop == hostHeight - NoteChrome.BarHeight, "the formatting controls share the bottom edge of the sheet");
+        Assert(!editor.IsReadOnly && ReferenceEquals(document, editor.Document) && ((NoteChrome)noteSurface).BarsVisible, "editing keeps the formatted document and shows bottom tools");
         Invoke(note,"FinishEditing");
         noteSurface.UpdateLayout();
         Assert(BodyBounds() == readingBounds, "hiding the toolbars restores the full reading viewport");
-        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && footer.Visibility == Visibility.Collapsed, "finishing editing keeps the same document and hides bottom tools");
+        Assert(editor.IsReadOnly && ReferenceEquals(document, editor.Document) && !((NoteChrome)noteSurface).BarsVisible, "finishing editing keeps the same document and hides bottom tools");
         CheckRichEditing(note, editor, formatBar);
         editor.Document.Blocks.Clear();
         editor.Document.Blocks.Add(new Paragraph());
@@ -418,6 +419,12 @@ internal static partial class Checks
     {
         root.Measure(new Size(width,height));root.Arrange(new Rect(0,0,width,height));root.UpdateLayout();
         var image=new RenderTargetBitmap(width,height,96,96,PixelFormats.Pbgra32); image.Render(root);
-        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));using var file=File.Create(path);encoder.Save(file);
+        BitmapSource visible = image;
+        if (root is NoteChrome sheet && sheet.SurfaceBounds.Height > 0)
+        {
+            var top = (int)Math.Floor(sheet.SurfaceBounds.Top);
+            visible = new CroppedBitmap(image, new Int32Rect(0, top, width, (int)Math.Ceiling(sheet.SurfaceBounds.Bottom) - top));
+        }
+        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(visible));using var file=File.Create(path);encoder.Save(file);
     }
 }

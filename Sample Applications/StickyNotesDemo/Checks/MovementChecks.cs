@@ -51,10 +51,11 @@ internal static partial class Checks
         Console.WriteLine($"Long note movement ({moves} events): {Stopwatch.GetElapsedTime(start).TotalMilliseconds:F2} ms, {allocated:N0} bytes, {refreshes} library refreshes");
         Assert(refreshes == 0, "window moves do not regenerate the note cards");
         var timer = (DispatcherTimer)typeof(MainWindow).GetField("saveTimer", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(main);
-        Assert(timer.IsEnabled && data.Left == 179 && data.Top == 189, "window moves still queue saving the final position");
+        var paperTop = 189 + ((NoteChrome)note.Content).SlotHeight;
+        Assert(timer.IsEnabled && data.Left == 179 && data.Top == paperTop, "window moves queue saving the visible paper's final position");
         timer.Stop();
-        Assert((bool)Invoke(main, "Save") && store.Load().Single(saved => saved.Id == data.Id) is { Left: 179, Top: 189 } saved &&
-               saved.Markdown == longMarkdown, "window movement saves the full note and final coordinates");
+        Assert((bool)Invoke(main, "Save") && store.Load().Single(saved => saved.Id == data.Id) is { Left: 179 } saved &&
+               saved.Top == paperTop && saved.Markdown == longMarkdown, "window movement saves the full note and final coordinates");
 
         var preview = list.Items.OfType<NoteCard>().Single(card => ReferenceEquals(card.Note, note));
         var previewText = new TextRange(preview.Preview.ContentStart, preview.Preview.ContentEnd).Text.TrimEnd();

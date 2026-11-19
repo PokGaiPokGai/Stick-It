@@ -9,78 +9,83 @@ namespace StickyNotesDemo;
 internal sealed class NoteChrome : Grid
 {
     internal const double BarHeight = 28;
-    private const double PaperInset = 6;
-    private const double Travel = BarHeight - PaperInset;
-    private static readonly PropertyPath SlideY = new("(0).(1)", RenderTransformProperty, TranslateTransform.YProperty);
-    private readonly Grid body, upper, lower;
-    private readonly RichTextBox editor;
-    private readonly FrameworkElement header, footer;
-    private Storyboard transition;
+    internal const double Corner = 10;
+    private static readonly DependencyProperty RevealProperty = DependencyProperty.Register(
+        "Reveal", typeof(double), typeof(NoteChrome),
+        new PropertyMetadata(0d, (d, _) => ((NoteChrome)d).UpdateSurface()));
 
-    internal NoteChrome(Grid body, RichTextBox editor, FrameworkElement header, FrameworkElement footer)
+    private readonly RectangleGeometry outline = new() { RadiusX = Corner, RadiusY = Corner };
+    private readonly TranslateTransform upper = new(), lower = new();
+    private readonly FrameworkElement header, footer;
+    private readonly RowDefinition topRow = new(), bottomRow = new();
+    private AnimationClock transition;
+    internal bool BarsVisible => header.Visibility == Visibility.Visible;
+    internal double SlotHeight => topRow.Height.Value;
+    internal Rect SurfaceBounds => outline.Rect;
+
+    internal NoteChrome(Border paper, FrameworkElement header, FrameworkElement footer)
     {
-        this.body = body;
-        this.editor = editor;
         this.header = header;
         this.footer = footer;
-        ClipToBounds = true;
-
-        // Two full-size clips move opposite edges of the viewport. Only their
-        // intersection is visible; neither the clips nor the text resize per frame.
-        upper = new Grid { Margin = new Thickness(0, PaperInset, 0, PaperInset), ClipToBounds = true, RenderTransform = new TranslateTransform() };
-        lower = new Grid { ClipToBounds = true, RenderTransform = new TranslateTransform() };
-        body.RenderTransform = new TranslateTransform();
-        body.Margin = BodyMargin(0);
-        lower.Children.Add(body);
-        upper.Children.Add(lower);
-        Children.Add(upper);
-        header.RenderTransform = new TranslateTransform(0, -BarHeight);
-        footer.RenderTransform = new TranslateTransform(0, BarHeight);
-        header.VerticalAlignment = VerticalAlignment.Top;
-        footer.VerticalAlignment = VerticalAlignment.Bottom;
-        header.Height = footer.Height = BarHeight;
-        header.Visibility = footer.Visibility = Visibility.Collapsed;
-        Children.Add(header);
-        Children.Add(footer);
+        RowDefinitions.Add(topRow);
+        RowDefinitions.Add(new RowDefinition());
+        RowDefinitions.Add(bottomRow);
+        SetRow(paper, 1);
+        Children.Add(paper);
+        AddControls(header, upper, 0);
+        AddControls(footer, lower, 2);
+        SetSlotHeight(BarHeight);
     }
 
-    // The last ten units of the right paper margin contain the scrollbar gutter.
-    private static Thickness BodyMargin(double bottom) => new(16, 0, 6, bottom);
-
-    internal void SetEditing(bool editing, bool animate, double? clickedLineBottom = null)
+    private void AddControls(FrameworkElement controls, TranslateTransform shift, int row)
     {
-        double from = ((TranslateTransform)upper.RenderTransform).Y, fromText = ((TranslateTransform)body.RenderTransform).Y;
-        double to = editing ? Travel : 0;
-        CancelTransition();
+        controls.RenderTransform = shift;
+        controls.Visibility = Visibility.Hidden;
+        var slot = new Grid { ClipToBounds = true };
+        slot.Children.Add(controls);
+        SetRow(slot, row);
+        Children.Add(slot);
+    }
+
+    internal void SetSlotHeight(double height)
+    {
+        if (SlotHeight == height) return;
+        topRow.Height = bottomRow.Height = new GridLength(height);
+        UpdateSurface();
+    }
+
+    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+    {
+        base.OnRenderSizeChanged(sizeInfo);
+        UpdateSurface();
+    }
+
+    // Draw one continuous sheet. Its animated outline does not clip, transform
+    // or invalidate the document visual. The same outline defines mouse input.
+    protected override void OnRender(DrawingContext dc) => dc.DrawGeometry(Background, null, outline);
+    internal bool ContainsSurface(Point point) => outline.FillContains(point);
+
+    private void UpdateSurface()
+    {
+        double inset = SlotHeight * (1 - (double)GetValue(RevealProperty));
+        upper.Y = inset;
+        lower.Y = -inset;
+        outline.Rect = new Rect(0, inset, RenderSize.Width, Math.Max(0, RenderSize.Height - 2 * inset));
+    }
+
+    internal void SetEditing(bool editing, bool animate)
+    {
+        var from = (double)GetValue(RevealProperty);
+        double to = editing ? 1 : 0;
         header.IsHitTestVisible = footer.IsHitTestVisible = editing;
         if (editing) header.Visibility = footer.Visibility = Visibility.Visible;
 
-        // Use the larger viewport throughout the slide so newly exposed lines
-        // are already drawn. At the document end WPF may clamp the old offset.
-        if (body.Margin.Bottom != 0)
-        {
-            var oldOffset = editor.VerticalOffset;
-            body.Margin = BodyMargin(0);
-            UpdateLayout();
-            fromText += editor.VerticalOffset - oldOffset;
-        }
-
-        double scrollBy = 0;
-        if (editing)
-        {
-            if (editor.VerticalOffset > 0 && editor.ExtentHeight - editor.ViewportHeight - editor.VerticalOffset < 0.5)
-                scrollBy = 2 * Travel;
-            else if (clickedLineBottom is double lineBottom)
-                scrollBy = Math.Clamp(lineBottom - (editor.ViewportHeight - 2 * Travel), 0, 2 * Travel);
-        }
-
         void Finish()
         {
-            var offset = editor.VerticalOffset;
-            body.Margin = BodyMargin(2 * to);
-            Position(null, to, to, 2 * to, 2 * to);
-            if (scrollBy > 0) editor.ScrollToVerticalOffset(offset + scrollBy);
-            if (!editing) header.Visibility = footer.Visibility = Visibility.Collapsed;
+            SetValue(RevealProperty, to);
+            ApplyAnimationClock(RevealProperty, null);
+            transition = null;
+            if (!editing) header.Visibility = footer.Visibility = Visibility.Hidden;
         }
 
         if (!animate || from == to)
@@ -89,45 +94,14 @@ internal sealed class NoteChrome : Grid
             return;
         }
 
-        var slide = new Storyboard
-        {
-            Duration = TimeSpan.FromMilliseconds(160 * Math.Abs(to - from) / Travel),
-            DecelerationRatio = 0.65
-        };
-        Position(slide, from, to, fromText, 2 * to - scrollBy);
+        var slide = new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(150 * Math.Abs(to - from)))
+            { DecelerationRatio = 0.5 }.CreateClock();
         slide.Completed += (_, _) =>
         {
             if (transition != slide) return;
-            CancelTransition();
             Finish();
         };
         transition = slide;
-        slide.Begin(this, true);
-    }
-
-    private void Position(Storyboard slide, double from, double to, double fromText, double toText)
-    {
-        void Move(FrameworkElement element, double start, double end)
-        {
-            ((TranslateTransform)element.RenderTransform).Y = start;
-            if (slide == null) return;
-            var motion = new DoubleAnimation(start, end, slide.Duration);
-            Storyboard.SetTarget(motion, element);
-            Storyboard.SetTargetProperty(motion, SlideY);
-            slide.Children.Add(motion);
-        }
-
-        Move(upper, from, to);
-        // The lower clip inherits the upper clip's movement.
-        Move(lower, -2 * from, -2 * to);
-        Move(body, fromText, toText);
-        Move(header, BarHeight * (from / Travel - 1), BarHeight * (to / Travel - 1));
-        Move(footer, BarHeight * (1 - from / Travel), BarHeight * (1 - to / Travel));
-    }
-
-    private void CancelTransition()
-    {
-        transition?.Remove(this);
-        transition = null;
+        ApplyAnimationClock(RevealProperty, slide);
     }
 }

@@ -27,7 +27,7 @@ internal static partial class Checks
         surface.UpdateLayout();
         Assert(wheel.Handled && (SystemParameters.WheelScrollLines == 0 || scroller.VerticalOffset > offset) &&
                session.Editor.IsReadOnly && scrollbar.Opacity == 0 && !scrollbar.IsHitTestVisible &&
-               FormattingScroller(note).Visibility == Visibility.Collapsed && note.Data.Markdown == initialMarkdown,
+               !((NoteChrome)note.Content).BarsVisible && note.Data.Markdown == initialMarkdown,
             "wheel over a reading note scrolls content without editing, showing controls or changing saved text");
 
         var handle = new WindowInteropHelper(note).EnsureHandle();
@@ -51,6 +51,9 @@ internal static partial class Checks
         offset = scroller.VerticalOffset;
         Assert(!NativeWheel(-120, outside) && scroller.VerticalOffset == offset,
             "a wheel message whose pointer is outside the note is not captured");
+        var clearMargin = new IntPtr(((long)(ushort)(bounds.Top + 2) << 16) | (ushort)(bounds.Left + 40));
+        Assert(!NativeWheel(-120, clearMargin) && scroller.VerticalOffset == offset,
+            "reading ignores wheel input in the hidden toolbar space inside the native window");
         note.SetMousePassthrough(true);
         Assert(!NativeWheel(-120, point) && scroller.VerticalOffset == offset,
             "game mouse passthrough leaves wheel input to the game");

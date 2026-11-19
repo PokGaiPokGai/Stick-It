@@ -19,7 +19,7 @@ internal static partial class Checks
     private static void TestNoteWindowStyles()
     {
         var foreground = GetForegroundWindow();
-        var note = new Window2(new NoteData { Markdown = "**仍可编辑**", Left = 120, Top = 160 });
+        var note = new Window2(new NoteData { Markdown = "**仍可编辑**", Left = 120, Top = 160, Height = 110 });
         var normalWindow = new Window();
         try
         {
@@ -32,8 +32,8 @@ internal static partial class Checks
                 "tool-window configuration preserves layered transparency and topmost state");
             Assert((style & 0x8000000) == 0 && note.Focusable && Find<RichTextBox>((DependencyObject)note.Content).Focusable,
                 "tool notes retain normal activation and a focusable editor");
-            Assert(note.Left == 120 && note.Top == 160 && note.Width == 320 && note.Height == 320,
-                "configuring the native window preserves note position and size");
+            Assert(note.Left == 120 && note.Top == 160 && note.Width == 320 && note.Height == 110,
+                "configuring the hidden native window preserves the stored geometry until opening fits its content");
 
             note.Hide();
             Assert(new WindowInteropHelper(note).EnsureHandle() == handle && GetWindowLongW(handle, -20) == style,

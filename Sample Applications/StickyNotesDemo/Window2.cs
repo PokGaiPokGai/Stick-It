@@ -34,6 +34,9 @@ public sealed class Window2 : Window
     private readonly ScrollViewer footer;
     private readonly TextBlock placeholder;
     private DispatcherOperation formattingRefresh;
+    private DispatcherOperation heightFit;
+    private bool fittingHeight;
+    private bool draggingNote;
     private bool disposing;
     private bool editing;
     private bool resumeEditingOnActivation;
@@ -46,14 +49,13 @@ public sealed class Window2 : Window
         Title="Stick It";
         Icon=BitmapFrame.Create(new Uri("pack://application:,,,/Stick It;component/Assets/StickIt.ico"));
         Width=data.Width; Height=data.Height; Left=data.Left; Top=data.Top;
-        MinWidth=200; MinHeight=160; Topmost=true; ShowInTaskbar=false;
+        MinWidth=200; Topmost=true; ShowInTaskbar=false;
         WindowStyle=WindowStyle.None; ResizeMode=ResizeMode.CanResize;
         Background=Brushes.Transparent; AllowsTransparency=true;
-        WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight=0, ResizeBorderThickness=new Thickness(5), GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(10) });
-        paper=new Border { CornerRadius=new CornerRadius(10), Background=PaperBrush, Padding=new Thickness(1) };
-        Content=paper;
+        WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight=0, ResizeBorderThickness=new Thickness(5,0,5,0), GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(NoteChrome.Corner) });
+        paper=new Border { Background=Brushes.Transparent, Padding=new Thickness(17,7,7,7) };
         paper.MouseLeftButtonDown += (_, e) => {
-            if (e.ButtonState==MouseButtonState.Pressed && (e.OriginalSource==paper || e.OriginalSource==chrome)) DragMove();
+            if (e.ButtonState==MouseButtonState.Pressed && e.OriginalSource==paper) DragMove();
         };
         var header=new Grid { Background=Brushes.Transparent, Margin=new Thickness(9,0,6,0) };
         header.MouseLeftButtonDown += (_, e) => { if (e.ButtonState==MouseButtonState.Pressed) DragMove(); };
@@ -64,12 +66,11 @@ public sealed class Window2 : Window
         header.Children.Add(close);
 
         var context=new ContextMenu();
-        paper.ContextMenu = context;
         var palette=new StackPanel { Orientation=Orientation.Horizontal, Margin=new Thickness(4) };
         foreach (var color in NoteData.Colors)
         {
             var swatch=new Button { Width=24, Height=24, Margin=new Thickness(3), Background=(Brush)new BrushConverter().ConvertFromString(color), BorderThickness=new Thickness(0), ToolTip=color };
-            swatch.Click += (_, _) => { Data.Color=color; paper.Background=PaperBrush; Data.Modified=DateTime.Now; context.IsOpen=false; NotifyCardChanged(); };
+            swatch.Click += (_, _) => { Data.Color=color; chrome.Background=PaperBrush; Data.Modified=DateTime.Now; context.IsOpen=false; NotifyCardChanged(); };
             palette.Children.Add(swatch);
         }
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
@@ -79,8 +80,13 @@ public sealed class Window2 : Window
         editor = new NoteEditor(data.Markdown) { ContextMenu = context };
         body.Children.Add(editor);
         footer = CreateFormattingToolbar();
-        chrome = new NoteChrome(body, editor, header, footer);
-        paper.Child = chrome;
+        paper.Child = body;
+        chrome = new NoteChrome(paper, header, footer) { Background = PaperBrush, ContextMenu = context };
+        Content = chrome;
+        editor.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
+        {
+            if (e.ExtentHeightChange != 0) QueueHeightFit();
+        }));
         placeholder=new TextBlock { Text="写点什么…", Opacity=.4, IsHitTestVisible=false, Margin=new Thickness(0,2,0,0) };
         body.Children.Add(placeholder);
         UpdatePlaceholder();
@@ -103,15 +109,14 @@ public sealed class Window2 : Window
                     node=node is FrameworkContentElement content ? content.Parent :
                         node is Visual ? VisualTreeHelper.GetParent(node) : null;
                 }
-                var point = e.GetPosition(editor);
-                var hit = editor.GetPositionFromPoint(point, false);
-                if (hit == null && Data.Markdown.Length != 0 && e.GetPosition(chrome).Y < NoteChrome.BarHeight)
+                if (Data.Markdown.Length != 0 && e.OriginalSource is not FrameworkContentElement &&
+                    e.GetPosition(paper).Y < NoteChrome.BarHeight && editor.GetPositionFromPoint(e.GetPosition(editor), false) == null)
                 {
                     e.Handled = true;
                     DragMove();
                     return;
                 }
-                SetEditing(true, hit?.GetCharacterRect(LogicalDirection.Forward).Bottom);
+                SetEditing(true);
             }
             QueueFormattingRefresh();
         };
@@ -132,8 +137,22 @@ public sealed class Window2 : Window
             if (editing && IsActive) editor.Focus();
             else FinishEditing();
         };
-        LocationChanged += (_, _) => { Data.Left=Left; Data.Top=Top; Changed?.Invoke(); };
-        SizeChanged += (_, _) => { Data.Width=Width; Data.Height=Height; Changed?.Invoke(); };
+        LocationChanged += (_, _) =>
+        {
+            if (fittingHeight || WindowState != WindowState.Normal) return;
+            Data.Left = Left;
+            Data.Top = Top + chrome.SlotHeight;
+            Changed?.Invoke();
+            QueueHeightFit();
+        };
+        SizeChanged += (_, e) =>
+        {
+            if (WindowState != WindowState.Normal) return;
+            if (e.WidthChanged) { Data.Width = e.NewSize.Width; Changed?.Invoke(); }
+            QueueHeightFit();
+        };
+        DpiChanged += (_, _) => QueueHeightFit();
+        StateChanged += (_, _) => QueueHeightFit();
     }
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -147,9 +166,17 @@ public sealed class Window2 : Window
 
     private IntPtr NoteWindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (message == 0x0216) draggingNote = true; // WM_MOVING: allow crossing a monitor edge.
+        if (message == 0x0232) draggingNote = false; // WM_EXITSIZEMOVE.
+        if (message is 0x0232 or 0x007E or 0x001A) QueueHeightFit(); // Move/resize finished, display or work area changed.
+        if (message == 0x0084 && !chrome.ContainsSurface(DesktopIntegration.PointInWindow(hwnd, lParam))) // WM_NCHITTEST
+        {
+            handled = true;
+            return new IntPtr(-1); // HTTRANSPARENT, including the two clear strips in reading mode.
+        }
         // Scroll a hovered reading note without activating its window or
         // moving keyboard focus into the editor.
-        if (message == 0x020A && !editing && !MousePassthrough && DesktopIntegration.ContainsWheelPoint(hwnd, lParam))
+        if (message == 0x020A && !editing && !MousePassthrough && chrome.ContainsSurface(DesktopIntegration.PointInWindow(hwnd, lParam)))
         {
             ScrollReadingContent(unchecked((short)(wParam.ToInt64() >> 16)));
             handled = true;
@@ -310,33 +337,82 @@ public sealed class Window2 : Window
         hover.Setters.Add(new Setter(BackgroundProperty,new SolidColorBrush(Color.FromArgb(18,0,0,0)))); template.Triggers.Add(hover);
         return template;
     }
-    public void Open(bool edit = false, bool activate = true)
+    internal double MeasurePaperHeight(double width, double availableHeight)
+    {
+        // Bound the first layout as well: a long note only needs one screen.
+        paper.Measure(new Size(width, availableHeight));
+        return paper.DesiredSize.Height;
+    }
+
+    private bool CanFit => IsVisible && !disposing && !draggingNote && WindowState == WindowState.Normal;
+
+    private void QueueHeightFit()
+    {
+        if (!CanFit || fittingHeight || heightFit != null) return;
+        heightFit = Dispatcher.InvokeAsync(() =>
+        {
+            heightFit = null;
+            if (CanFit && editor.ExtentHeight > 0) FitContentHeight();
+        }, DispatcherPriority.Loaded);
+    }
+
+    private void FitContentHeight(bool opening = false)
+    {
+        // Creating the first HWND also raises LocationChanged. Its provisional
+        // position must not replace the stored text anchor during restoration.
+        fittingHeight = true;
+        try
+        {
+            var handle = new WindowInteropHelper(this).EnsureHandle();
+            var display = DesktopIntegration.GetNoteDisplay(handle);
+            chrome.SetSlotHeight(display.BarPixels / display.Scale);
+            var desired = opening ? MeasurePaperHeight(display.Width, display.AvailablePaperHeight)
+                : editor.ExtentHeight + paper.Padding.Top + paper.Padding.Bottom;
+            var preferredTop = display.Bounds.Top + (int)Math.Round((Data.Top - Top) * display.Scale);
+            var fitted = display.FitWindow(desired, preferredTop);
+            if (opening) fitted = DesktopIntegration.VisibleBounds(fitted, display.Work);
+            editor.SetValue(NoteEditor.FitsWorkAreaProperty, desired < display.AvailablePaperHeight);
+            if (!fitted.Equals(display.Bounds)) DesktopIntegration.SetNoteBounds(handle, fitted);
+            var readingHeight = (fitted.Bottom - fitted.Top - 2 * display.BarPixels) / display.Scale;
+            if (Data.Height != readingHeight) { Data.Height = readingHeight; Changed?.Invoke(); }
+        }
+        finally { fittingHeight = false; }
+    }
+
+    public void Open(bool edit = false, bool activate = true, bool atCursor = false)
     {
         if (activate) SetMousePassthrough(false);
         Data.IsOpen = true;
         ShowActivated = activate;
-        DesktopIntegration.EnsureVisible(this);
+        if (!IsVisible)
+        {
+            SetEditing(edit, animate:false);
+            if (atCursor) DesktopIntegration.PlaceAtCursor(this);
+            else FitContentHeight(opening:true);
+        }
         Show();
         WindowState = WindowState.Normal;
         if (activate) Activate();
         if (edit) { BeginEditing(); editor.Focus(); }
+        QueueHeightFit();
         Changed?.Invoke();
     }
     private void UpdatePlaceholder() => placeholder.Visibility=!editing && Data.Markdown.Length==0 ? Visibility.Visible : Visibility.Collapsed;
     private void BeginEditing() => SetEditing(true);
     private void FinishEditing() => SetEditing(false);
-    private void SetEditing(bool value, double? clickedLineBottom = null, bool animate = true)
+    private void SetEditing(bool value, bool animate = true)
     {
         resumeEditingOnActivation=false;
-        if (editing == value) return;
+        if (editing == value && animate) return;
         editing = value;
         editor.IsReadOnly = !value;
         if (value) editor.ClearValue(ContextMenuProperty);
-        else editor.ContextMenu = paper.ContextMenu;
-        chrome.SetEditing(value, animate && IsVisible && SystemParameters.ClientAreaAnimation, clickedLineBottom);
+        else editor.ContextMenu = chrome.ContextMenu;
+        chrome.SetEditing(value, animate && IsVisible && SystemParameters.ClientAreaAnimation);
         UpdatePlaceholder();
         if (value) QueueFormattingRefresh();
     }
+
     protected override void OnClosing(CancelEventArgs e)
     {
         if (!disposing) { e.Cancel=true; SetEditing(false, animate:false); Data.IsOpen=false; Hide(); Changed?.Invoke(); }
