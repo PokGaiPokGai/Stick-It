@@ -36,6 +36,7 @@ public sealed class Window2 : Window
     private readonly TextBlock placeholder;
     private DispatcherOperation formattingRefresh;
     private DispatcherOperation heightFit;
+    private DispatcherOperation pinRepair;
     private bool fittingHeight;
     private bool draggingNote;
     private bool disposing;
@@ -166,6 +167,16 @@ public sealed class Window2 : Window
 
     private IntPtr NoteWindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (message == 0x0047 && IsVisible && !disposing && pinRepair == null && !DesktopIntegration.IsTopmost(hwnd)) // WM_WINDOWPOSCHANGED
+        {
+            // WPF updates WindowState after this message during a native restore.
+            pinRepair = Dispatcher.InvokeAsync(() =>
+            {
+                pinRepair = null;
+                if (IsVisible && !disposing && WindowState != WindowState.Minimized)
+                    DesktopIntegration.EnsureNoteTopmost(hwnd);
+            });
+        }
         if (message == 0x0216) draggingNote = true; // WM_MOVING: allow crossing a monitor edge.
         if (message == 0x0232) draggingNote = false; // WM_EXITSIZEMOVE.
         if (message is 0x0232 or 0x007E or 0x001A) QueueHeightFit(); // Move/resize finished, display or work area changed.
@@ -399,6 +410,7 @@ public sealed class Window2 : Window
         }
         Show();
         WindowState = WindowState.Normal;
+        DesktopIntegration.EnsureNoteTopmost(new WindowInteropHelper(this).Handle);
         if (activate) Activate();
         if (edit) { BeginEditing(); editor.Focus(); }
         QueueHeightFit();

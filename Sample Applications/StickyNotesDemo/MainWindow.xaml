@@ -148,18 +148,29 @@
                     <Border Style="{StaticResource SettingsCard}">
                         <StackPanel>
                             <Grid Margin="15">
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <StackPanel VerticalAlignment="Center" Margin="0,0,4,0">
-                                    <TextBlock Text="字体大小" FontSize="{DynamicResource FontSize14}" TextWrapping="Wrap"/>
-                                    <TextBlock Text="默认 100%" FontSize="{DynamicResource FontSize12}" Foreground="#767676" Margin="0,5,0,0" TextWrapping="Wrap"/>
-                                </StackPanel>
-                                <ComboBox x:Name="FontSizePicker" Grid.Column="1" AutomationProperties.Name="字体大小"
-                                          ItemStringFormat="{}{0}%" FontSize="{DynamicResource FontSize13}" MinWidth="86" MinHeight="30"
-                                          Padding="8,3" VerticalAlignment="Center" VerticalContentAlignment="Center">
-                                    <ComboBox.Resources>
-                                        <ResourceDictionary Source="pack://application:,,,/PresentationFramework.Fluent;component/Themes/Fluent.Light.xaml"/>
-                                    </ComboBox.Resources>
-                                </ComboBox>
+                                <TextBlock Text="字体大小" FontSize="{DynamicResource FontSize14}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="FontSizeValue" Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           FontSize="{DynamicResource FontSize13}" FontWeight="SemiBold"
+                                           Text="{Binding Value, ElementName=FontSizeSlider, StringFormat={}{0:0}%}"/>
+                                <Slider x:Name="FontSizeSlider" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,3,0,2"
+                                        IsSnapToTickEnabled="True" IsMoveToPointEnabled="True" LargeChange="25"
+                                        AutomationProperties.Name="字体大小" AutomationProperties.HelpText="默认 100%，可用左右方向键微调。"
+                                        Thumb.DragStarted="FontSizeDragStarted" Thumb.DragCompleted="FontSizeDragCompleted">
+                                    <Slider.Resources>
+                                        <ResourceDictionary>
+                                            <ResourceDictionary.MergedDictionaries>
+                                                <ResourceDictionary Source="pack://application:,,,/PresentationFramework.Fluent;component/Themes/Fluent.Light.xaml"/>
+                                            </ResourceDictionary.MergedDictionaries>
+                                            <SolidColorBrush x:Key="SliderThumbBackground" Color="#414141"/>
+                                        </ResourceDictionary>
+                                    </Slider.Resources>
+                                </Slider>
+                                <TextBlock Grid.Row="2" Text="文字预览" FontSize="14" Foreground="#484848" TextWrapping="Wrap"
+                                           LayoutTransform="{DynamicResource DocumentTextScale}"/>
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="默认 100%" FontSize="{DynamicResource FontSize12}"
+                                           Foreground="#767676" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </Grid>
                             <Border Height="1" Background="#EAEAEA" Margin="15,0"/>
                             <CheckBox x:Name="RandomNoteColor" Style="{StaticResource SettingsSwitch}" Click="RandomNoteColorClick" AutomationProperties.Name="新建便签随机颜色">

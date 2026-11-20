@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -19,6 +20,8 @@ public partial class MainWindow : Window
     private NoteSettings settings;
     private readonly List<Window2> notes=new();
     private readonly DispatcherTimer saveTimer;
+    private readonly DispatcherTimer fontPreviewTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(75) };
+    private bool draggingFontSize;
     private readonly GameMouseMonitor gameMouse;
     private System.Windows.Forms.NotifyIcon tray;
     private System.Windows.Forms.ContextMenuStrip trayMenu;
@@ -39,9 +42,16 @@ public partial class MainWindow : Window
         gameMouse = new GameMouseMonitor(SetNotesMousePassthrough, MouseModeFailed);
         InitializeComponent();
         RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
-        FontSizePicker.ItemsSource = NoteSettings.FontPercentages;
-        FontSizePicker.SelectedItem = settings.FontSizePercent;
-        FontSizePicker.SelectionChanged += FontSizeSelected;
+        FontSizeSlider.Minimum = NoteSettings.MinFontSizePercent;
+        FontSizeSlider.Maximum = NoteSettings.MaxFontSizePercent;
+        FontSizeSlider.TickFrequency = FontSizeSlider.SmallChange = NoteSettings.FontSizeStep;
+        FontSizeSlider.Value = settings.FontSizePercent;
+        FontSizeSlider.ValueChanged += FontSizeChanged;
+        fontPreviewTimer.Tick += (_, _) =>
+        {
+            fontPreviewTimer.Stop();
+            PreviewTextScale(FontSizeSlider.Value / 100);
+        };
         ApplyFontSize();
     }
     public void Start(bool atSignIn = false)
@@ -126,22 +136,49 @@ public partial class MainWindow : Window
             RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
     }
 
-    private void FontSizeSelected(object sender, SelectionChangedEventArgs e)
+    private void FontSizeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (FontSizePicker.SelectedItem is not int percent || percent == settings.FontSizePercent) return;
-        if (TrySaveSettings(settings with { FontSizePercent = percent })) ApplyFontSize();
-        else FontSizePicker.SelectedItem = settings.FontSizePercent;
+        // Range automation can set values between the slider's pointer and keyboard ticks.
+        var percent = NoteSettings.FontSizeStep * Math.Round(e.NewValue / NoteSettings.FontSizeStep, MidpointRounding.AwayFromZero);
+        if (percent != e.NewValue) { FontSizeSlider.Value = percent; return; }
+        if (draggingFontSize) fontPreviewTimer.Start();
+        else if (percent != settings.FontSizePercent) SaveFontSize();
+    }
+
+    private void FontSizeDragStarted(object sender, DragStartedEventArgs e) => draggingFontSize = true;
+
+    private void FontSizeDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        draggingFontSize = false;
+        fontPreviewTimer.Stop();
+        if (e.Canceled) FontSizeSlider.Value = settings.FontSizePercent;
+        SaveFontSize();
+    }
+
+    private void SaveFontSize()
+    {
+        var percent = (int)FontSizeSlider.Value;
+        if (percent != settings.FontSizePercent && !TrySaveSettings(settings with { FontSizePercent = percent }))
+            FontSizeSlider.Value = settings.FontSizePercent;
+        ApplyFontSize();
     }
 
     private void ApplyFontSize()
     {
         var scale = settings.FontSizePercent / 100.0;
-        var transform = new ScaleTransform(scale, scale);
-        transform.Freeze();
-        Resources["DocumentTextScale"] = transform;
+        PreviewTextScale(scale);
+        // Keep the settings layout steady under the pointer until the drag ends.
         FontSize = SystemFonts.MessageFontSize * scale;
         foreach (var size in new[] { 9, 12, 13, 14, 17, 22 })
             Resources["FontSize" + size] = size * scale;
+    }
+
+    private void PreviewTextScale(double scale)
+    {
+        if (Resources["DocumentTextScale"] is ScaleTransform previous && previous.ScaleX == scale) return;
+        var transform = new ScaleTransform(scale, scale);
+        transform.Freeze();
+        Resources["DocumentTextScale"] = transform;
         foreach (var note in notes) note.SetTextScale(transform);
     }
 
@@ -192,7 +229,7 @@ public partial class MainWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
-        if (!e.Handled && e.Key == Key.Escape && SettingsPage.Visibility == Visibility.Visible && !FontSizePicker.IsDropDownOpen)
+        if (!e.Handled && e.Key == Key.Escape && SettingsPage.Visibility == Visibility.Visible)
         {
             ShowSettings(false);
             e.Handled = true;
@@ -239,6 +276,7 @@ public partial class MainWindow : Window
     {
         exiting = true;
         saveTimer.Stop();
+        fontPreviewTimer.Stop();
         gameMouse.Dispose();
         foreach (var note in notes) note.PrepareForShutdown();
         if (hotkeyRegistered) DesktopIntegration.UnregisterHotKey(source.Handle, DesktopIntegration.HotkeyId);

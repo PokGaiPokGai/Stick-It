@@ -34,20 +34,29 @@ internal static partial class Checks
     // the actual UI thread before constructing or showing any WPF window.
     private static int CheckFittedWindow()
     {
+        var name = "StickIt.Height." + Guid.NewGuid().ToString("N");
+        return OnNonInputDesktop(name, () =>
+        {
+            TestFittedWindow(name);
+            Console.WriteLine("Passed on an isolated non-input Windows desktop.");
+        });
+    }
+
+    private static int OnNonInputDesktop(string name, Action run)
+    {
         Exception failure = null;
         var ui = new Thread(() =>
         {
             try
             {
-                var desktop = CreateDesktopW("StickIt.Height." + Guid.NewGuid().ToString("N"), IntPtr.Zero, IntPtr.Zero,
+                var desktop = CreateDesktopW(name, IntPtr.Zero, IntPtr.Zero,
                     0, 0x0001 | 0x0002 | 0x0040 | 0x0080, IntPtr.Zero);
                 if (desktop == IntPtr.Zero || !SetThreadDesktop(desktop)) throw new Win32Exception();
                 if (!GetUserObjectInformationW(GetThreadDesktop(GetCurrentThreadId()), 6, out var receivesInput, 4, out _))
                     throw new Win32Exception();
                 if (receivesInput != 0) throw new InvalidOperationException("Refusing to test on the user's input desktop.");
                 _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                TestFittedWindow();
-                Console.WriteLine("Passed on an isolated non-input Windows desktop.");
+                run();
             }
             catch (Exception error) { failure = error; }
         });
@@ -185,15 +194,16 @@ internal static partial class Checks
         finally { behind.Close(); }
     }
 
-    private static void TestFittedWindow()
+    private static void TestFittedWindow(string desktopName)
     {
         var settingsDirectory = Directory.CreateTempSubdirectory("StickIt-Fit-");
         var library = new MainWindow(new NoteStore(settingsDirectory.FullName));
-        var font = (ComboBox)library.FindName("FontSizePicker");
+        var font = (Slider)library.FindName("FontSizeSlider");
         var data = new NoteData { Width = 200, Height = 33, Left = 120, Top = 120, Markdown = "一行待办" };
         var note = (Window2)Invoke(library, "AddNote", data);
         try
         {
+            TestPinnedWindowOrder(desktopName, Settle);
             note.Open(activate:false);
             var handle = new WindowInteropHelper(note).Handle;
             var editor = Find<RichTextBox>(note);
@@ -248,7 +258,7 @@ internal static partial class Checks
             Settle();
             Fits("six lines fit in the editing window with no scrollbar");
             Assert(Pixels() == editHeight, "six lines still fit inside the minimum body with both bars fully expanded");
-            font.SelectedItem = 200;
+            font.Value = 200;
             Settle();
             var largeHeight = Pixels();
             Assert(largeHeight > editHeight && Math.Abs(largeHeight - 2 * bars - (2 * editor.ExtentHeight + 14) * screen.Scale) <= 1.01 &&
@@ -257,7 +267,7 @@ internal static partial class Checks
             Invoke(note, "FinishEditing");
             Settle();
             Assert(Pixels() == largeHeight - 2 * bars, "large reading text retains the full travel of both toolbars");
-            font.SelectedItem = 100;
+            font.Value = 100;
             Settle();
             Assert(Pixels() == minHeight && data.Height == minHeight / screen.Scale, "reading retracts both full bars to the 160-DIP body");
             TestEditClick(note, editor, Settle);
@@ -294,12 +304,12 @@ internal static partial class Checks
                    thumb.Opacity == 1 && thumb.IsHitTestVisible,
                 "long text reaches exactly the usable monitor height before showing its editing scrollbar");
             var longDocument = editor.Document;
-            font.SelectedItem = 75;
+            font.Value = 75;
             Settle();
             Assert(Pixels() == d.Work.Bottom - d.Work.Top && scroll.ScrollableHeight > 0 && thumb.Opacity == 1 &&
                    ReferenceEquals(editor.Document, longDocument),
                 "resizing 82,000 characters preserves the document and keeps scrolling within one screen");
-            font.SelectedItem = 100;
+            font.Value = 100;
             Settle();
             editor.ScrollToEnd();
             Settle();

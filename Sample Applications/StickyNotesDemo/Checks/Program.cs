@@ -23,6 +23,7 @@ internal static partial class Checks
     [STAThread] static int Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "fit-window") return CheckFittedWindow();
+        if (args.Length == 2 && args[0] == "ordinary-window") return OnNonInputDesktop(args[1], ShowOrdinaryWindow);
         if (args.Length > 0 && args[0] is "contender" or "startup-contender")
         {
             using var other = new SingleInstance(args[1], activateExisting: args[0] == "contender");
@@ -62,7 +63,8 @@ internal static partial class Checks
     }
     static Process Child(string mode,string name)
     {
-        var start=new ProcessStartInfo(Environment.ProcessPath) { UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true };
+        var start=new ProcessStartInfo(Environment.ProcessPath) { UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true,
+            RedirectStandardInput=mode == "ordinary-window" };
         start.ArgumentList.Add(mode); start.ArgumentList.Add(name);
         return Process.Start(start);
     }

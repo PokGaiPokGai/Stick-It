@@ -39,13 +39,27 @@ public static class DesktopIntegration
         UpdateExtendedStyle(hwnd, enabled ? passthrough : 0, enabled ? 0 : passthrough);
     }
 
+    private const int ExtendedStyle = -20;
+    private static int ReadExtendedStyle(IntPtr hwnd)
+    {
+        var style = GetWindowLongW(hwnd, ExtendedStyle);
+        if (style == 0 && Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
+        return style;
+    }
+
+    internal static bool IsTopmost(IntPtr hwnd) => (ReadExtendedStyle(hwnd) & 0x8) != 0; // WS_EX_TOPMOST
+
+    internal static void EnsureNoteTopmost(IntPtr hwnd)
+    {
+        const uint keepBoundsAndFocus = 0x1 | 0x2 | 0x10 | 0x200; // NOSIZE | NOMOVE | NOACTIVATE | NOOWNERZORDER
+        if (!IsTopmost(hwnd) && !SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, keepBoundsAndFocus))
+            throw new Win32Exception();
+    }
+
     private static void UpdateExtendedStyle(IntPtr hwnd, int add, int remove)
     {
-        const int extendedStyle = -20;
-        var style = GetWindowLongW(hwnd, extendedStyle);
-        if (style == 0 && Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
-
-        if (SetWindowLongW(hwnd, extendedStyle, (style | add) & ~remove) == 0 &&
+        var style = ReadExtendedStyle(hwnd);
+        if (SetWindowLongW(hwnd, ExtendedStyle, (style | add) & ~remove) == 0 &&
             Marshal.GetLastWin32Error() != 0) throw new Win32Exception();
 
         const uint refreshFrame = 0x20 | 0x1 | 0x2 | 0x4 | 0x10; // FRAMECHANGED, NOSIZE, NOMOVE, NOZORDER, NOACTIVATE
