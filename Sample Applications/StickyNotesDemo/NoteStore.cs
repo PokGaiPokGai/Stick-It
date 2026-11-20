@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Documents;
@@ -26,9 +27,12 @@ public sealed class NoteData
     public bool IsOpen { get; set; } = true;
 }
 
-public sealed class NoteSettings
+public sealed record NoteSettings
 {
-    public bool RandomNewNoteColor { get; set; } = true;
+    internal static readonly int[] FontPercentages = Enumerable.Range(75, 200 - 75 + 1)
+        .Where(percent => percent % 5 == 0).ToArray();
+    public int FontSizePercent { get; init; } = 100;
+    public bool RandomNewNoteColor { get; init; } = true;
 
     internal NoteData CreateNote(Random random) => new()
     {
@@ -44,8 +48,11 @@ public sealed class NoteStore
     {
         var path = Path.Combine(directory, "settings.json");
         if (!File.Exists(path)) return new NoteSettings();
-        return JsonSerializer.Deserialize<NoteSettings>(File.ReadAllText(path))
+        var settings = JsonSerializer.Deserialize<NoteSettings>(File.ReadAllText(path))
             ?? throw new InvalidDataException("设置数据为空。");
+        if (!NoteSettings.FontPercentages.Contains(settings.FontSizePercent))
+            throw new InvalidDataException("字体大小设置无效。");
+        return settings;
     }
 
     public void SaveSettings(NoteSettings settings)

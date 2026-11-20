@@ -55,7 +55,7 @@ internal static partial class Checks
             int changes = 0;
             editor.TextChanged += (_, _) => changes++;
 
-            const int width = 320, paperHeight = 190;
+            const int width = 200, paperHeight = 160;
             var size = new Size(width, paperHeight + 2 * chrome.SlotHeight);
             chrome.Measure(size);
             chrome.Arrange(new Rect(size));
@@ -102,6 +102,7 @@ internal static partial class Checks
             }
 
             var closedEdges = PaintedEdges();
+            Assert(closedEdges == (0, paperHeight - 1), "only the 200 by 160 paper is painted before editing");
             chrome.SetEditing(true, true);
             var opening = Slide(chrome);
             Sample(chrome, opening, 0);
@@ -137,7 +138,9 @@ internal static partial class Checks
             Assert(lastFrame == closedEdges && PaintedEdges() == closedEdges && Math.Abs(GlyphY(first) - firstY) < .01 &&
                    !chrome.BarsVisible, "the final animation frame and the compact window paint the same edges and glyph");
             chrome.SetEditing(true, false);
-            _ = PaintedEdges();
+            var openEdges = PaintedEdges();
+            Assert(closedEdges.Top - openEdges.Top == 28 && openEdges.Bottom - closedEdges.Bottom == 28,
+                "the painted edges of a minimum note travel exactly 28 DIPs above and below the paper");
             chrome.SetEditing(false, false);
             Assert(PaintedEdges() == closedEdges, "the full editing and compact reading silhouettes are also continuous with animations off");
 

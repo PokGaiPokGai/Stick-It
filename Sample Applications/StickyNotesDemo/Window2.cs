@@ -29,6 +29,7 @@ public sealed class Window2 : Window
     internal event Action CardChanged;
     public event Action DeleteRequested;
     private readonly NoteEditor editor;
+    private readonly Grid body = new();
     private readonly Border paper;
     private readonly NoteChrome chrome;
     private readonly ScrollViewer footer;
@@ -76,7 +77,6 @@ public sealed class Window2 : Window
         context.Items.Add(new MenuItem { Header=palette, StaysOpenOnClick=true });
         context.Items.Add(new Separator());
         var delete=new MenuItem { Header="删除便签" }; delete.Click += (_, _) => DeleteRequested?.Invoke(); context.Items.Add(delete);
-        var body = new Grid();
         editor = new NoteEditor(data.Markdown) { ContextMenu = context };
         body.Children.Add(editor);
         footer = CreateFormattingToolbar();
@@ -344,6 +344,12 @@ public sealed class Window2 : Window
         return paper.DesiredSize.Height;
     }
 
+    internal void SetTextScale(ScaleTransform scale)
+    {
+        body.LayoutTransform = scale;
+        QueueHeightFit();
+    }
+
     private bool CanFit => IsVisible && !disposing && !draggingNote && WindowState == WindowState.Normal;
 
     private void QueueHeightFit()
@@ -366,8 +372,9 @@ public sealed class Window2 : Window
             var handle = new WindowInteropHelper(this).EnsureHandle();
             var display = DesktopIntegration.GetNoteDisplay(handle);
             chrome.SetSlotHeight(display.BarPixels / display.Scale);
+            // The editor reports its text extent before the body's layout transform.
             var desired = opening ? MeasurePaperHeight(display.Width, display.AvailablePaperHeight)
-                : editor.ExtentHeight + paper.Padding.Top + paper.Padding.Bottom;
+                : editor.ExtentHeight * body.LayoutTransform.Value.M22 + paper.Padding.Top + paper.Padding.Bottom;
             var preferredTop = display.Bounds.Top + (int)Math.Round((Data.Top - Top) * display.Scale);
             var fitted = display.FitWindow(desired, preferredTop);
             if (opening) fitted = DesktopIntegration.VisibleBounds(fitted, display.Work);

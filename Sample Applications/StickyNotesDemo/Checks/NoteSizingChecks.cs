@@ -68,30 +68,40 @@ internal static partial class Checks
             var display = new DesktopIntegration.NoteDisplay(bounds, work, scale);
             var shortNote = display.FitWindow(32.62, bounds.Top);
             var longNote = display.FitWindow(100000, bounds.Top);
-            Assert(shortNote.Top == Math.Clamp(bounds.Top - display.BarPixels, work.Top, work.Bottom - (shortNote.Bottom - shortNote.Top)) &&
-                   shortNote.Bottom - shortNote.Top == (int)Math.Ceiling(32.62 * scale) + 2 * display.BarPixels &&
+            var minimum = (int)Math.Ceiling(160 * scale);
+            var bar = (int)Math.Round(28 * scale);
+            var minimumWithBars = minimum + 2 * bar;
+            Assert(shortNote.Top == Math.Clamp(bounds.Top - bar, work.Top, work.Bottom - minimumWithBars) &&
+                   shortNote.Bottom - shortNote.Top == minimumWithBars &&
                    longNote.Top == work.Top && longNote.Bottom == work.Bottom && longNote.Left == bounds.Left && longNote.Right == bounds.Right,
-                $"fitting rounds up at {scale:P0} and uses the taskbar-free area of a negative-coordinate monitor");
+                $"a short note fits its 160-DIP body plus both full bars and a long note fits the work area at {scale:P0}");
+            foreach (var text in new[] { minimum - 1, minimum, minimum + 1 })
+            {
+                var window = display.FitWindow((text - .25) / scale, -800);
+                Assert(window.Bottom - window.Top == Math.Max(minimum, text) + 2 * bar && window.Top + bar == -800,
+                    $"the paper starts growing above its own minimum at {scale:P0} with {text}px of content");
+            }
         }
         var data = new NoteData { Markdown = "## 今日待办\n\n- [ ] 整理参考\n- [x] 保存修改", Height = 640 };
         var note = new Window2(data);
         try
         {
-            var paper = (FrameworkElement)note.Content;
-            var h = note.MeasurePaperHeight(320, 900);
-            Render(paper, 320, (int)Math.Ceiling(h + 2 * NoteChrome.BarHeight), Path.Combine(output, "fit-reading.png"));
-            Assert(33 < h && h < 120, "opening fits the rendered Markdown instead of reusing an old tall window");
+            var chrome = (NoteChrome)note.Content;
+            var h = note.MeasurePaperHeight(200, 900);
+            Render(chrome, 200, 216, Path.Combine(output, "fit-reading.png"));
+            Assert(33 < h && h < 160 && chrome.SurfaceBounds == new Rect(0, 28, 200, 160),
+                "short formatted notes occupy a 200 by 160 sheet between two transparent strips");
             Invoke(note, "BeginEditing");
-            var editHeight = note.MeasurePaperHeight(320, 900);
-            Render(paper, 320, (int)Math.Ceiling(editHeight + 2 * NoteChrome.BarHeight), Path.Combine(output, "fit-editing.png"));
-            Assert(editHeight == h && Math.Abs(note.MeasurePaperHeight(320, 75) - 75) < 0.1,
-                "opening either mode measures the same paper and obeys the available height");
+            var editHeight = note.MeasurePaperHeight(200, 900);
+            Render(chrome, 200, 216, Path.Combine(output, "fit-editing.png"));
+            Assert(editHeight == h && chrome.SurfaceBounds == new Rect(0, 0, 200, 216) && Math.Abs(note.MeasurePaperHeight(200, 75) - 75) < .1,
+                "editing draws a single 200 by 216 sheet with both 28-DIP bars outside the body");
             data.Height = Math.Ceiling(h);
             var store = new NoteStore(Path.Combine(temp, "fitted-notes"));
             store.Save([data]);
             var restored = store.Load().Single();
             Assert(restored.Id == data.Id && restored.Height == data.Height && restored.Markdown == data.Markdown,
-                "compact notes below the old height limit survive saving and restarting");
+                "previously saved heights below 160 still load with their original text and identity");
             data.Height = 0;
             store.Save([data]);
             try { store.Load(); throw new Exception("Invalid zero height accepted."); }
@@ -116,11 +126,12 @@ internal static partial class Checks
             behind.Show();
             settle();
             var other = new WindowInteropHelper(behind).Handle;
+            var reading = chrome.SurfaceBounds;
             var top = new DesktopIntegration.Point { X = (bounds.Left + bounds.Right) / 2, Y = bounds.Top + display.BarPixels / 2 };
-            var bottom = new DesktopIntegration.Point { X = top.X, Y = bounds.Bottom - display.BarPixels / 2 };
+            var bottom = new DesktopIntegration.Point { X = top.X, Y = bounds.Bottom - display.BarPixels / 2 - 1 };
             var middle = new DesktopIntegration.Point { X = top.X, Y = (bounds.Top + bounds.Bottom) / 2 };
             Assert(WindowFromPoint(top) == other && WindowFromPoint(bottom) == other && WindowFromPoint(middle) == handle,
-                "Windows sends input through both clear reading margins to a separate window underneath");
+                "both retracted toolbar strips pass through to the window underneath the reading note");
 
             var run = ((Paragraph)editor.Document.Blocks.FirstBlock).Inlines.OfType<Run>().First();
             var start = run.ContentStart.GetPositionAtOffset(1).GetCharacterRect(LogicalDirection.Forward);
@@ -163,8 +174,11 @@ internal static partial class Checks
                 settle();
                 Assert(nativeChanges == 0 && DesktopIntegration.GetNoteDisplay(handle).Bounds.Equals(bounds) && baseline.SequenceEqual(TextPixels()),
                     "a routed text click and keyboard focus retain identical glyph pixels without a native move or resize");
-                Assert(WindowFromPoint(top) == handle && WindowFromPoint(bottom) == handle,
-                    "both drawn toolbars are hittable after the sheet expands");
+                var expanded = chrome.SurfaceBounds;
+                Assert(Math.Abs((reading.Top - expanded.Top) * display.Scale - display.BarPixels) < .01 &&
+                       Math.Abs((expanded.Bottom - reading.Bottom) * display.Scale - display.BarPixels) < .01 &&
+                       WindowFromPoint(top) == handle && WindowFromPoint(bottom) == handle,
+                    "each edge expands by one full toolbar height and the newly drawn strips receive input");
             }
             finally { note.SizeChanged -= Resized; note.LocationChanged -= Moved; }
         }
@@ -173,8 +187,11 @@ internal static partial class Checks
 
     private static void TestFittedWindow()
     {
-        var data = new NoteData { Width = 320, Height = 600, Left = 120, Top = 120, Markdown = "一行待办" };
-        var note = new Window2(data);
+        var settingsDirectory = Directory.CreateTempSubdirectory("StickIt-Fit-");
+        var library = new MainWindow(new NoteStore(settingsDirectory.FullName));
+        var font = (ComboBox)library.FindName("FontSizePicker");
+        var data = new NoteData { Width = 200, Height = 33, Left = 120, Top = 120, Markdown = "一行待办" };
+        var note = (Window2)Invoke(library, "AddNote", data);
         try
         {
             note.Open(activate:false);
@@ -197,31 +214,66 @@ internal static partial class Checks
             {
                 var d = DesktopIntegration.GetNoteDisplay(handle);
                 var extra = editor.ViewportHeight - editor.ExtentHeight;
-                Assert(extra >= -0.02 && extra < 2 && (thumb.Opacity == 0 || !thumb.IsVisible) &&
+                var minViewport = Math.Ceiling(160 * d.Scale) / d.Scale - 14;
+                Assert(extra >= -0.02 && Math.Abs(editor.ViewportHeight - Math.Max(minViewport, editor.ExtentHeight)) < 2 &&
+                       (thumb.Opacity == 0 || !thumb.IsVisible) &&
                        d.Bounds.Top >= d.Work.Top && d.Bounds.Bottom <= d.Work.Bottom,
                     $"{description} (window={Pixels()}px, extent={editor.ExtentHeight:F2}, viewport={editor.ViewportHeight:F2})");
             }
             var firstHeight = Pixels();
             Settle();
-            Fits("an existing one-line note opens at its text height");
+            Fits("an existing one-line note opens at its new minimum without showing a scrollbar");
             var shortHeight = Pixels();
-            Assert(shortHeight == firstHeight, $"the first visible window already has its fitted height ({firstHeight}px)");
-            Assert(data.Top == 120 && Math.Abs(note.Top + ((NoteChrome)note.Content).SlotHeight - data.Top) < .6,
+            var screen = DesktopIntegration.GetNoteDisplay(handle);
+            var minHeight = (int)Math.Ceiling(160 * screen.Scale);
+            var bars = screen.BarPixels;
+            Assert(shortHeight == firstHeight && shortHeight == minHeight && data.Height == minHeight / screen.Scale && note.ActualWidth == 200,
+                $"the first visible frame restores a 200 by 160 reading body from a legacy height ({firstHeight}px)");
+            Assert(data.Top == 120 && Math.Abs(note.Top + bars / screen.Scale - data.Top) < .6,
                 "opening a saved note keeps the original reading paper anchor");
             TestEditClick(note, editor, Settle);
             Fits("editing the short note fits its full text and both bars");
             var editHeight = Pixels();
-            Assert(editHeight > shortHeight, "entering edit mode makes room for the controls");
+            Assert(editHeight == shortHeight + 2 * bars && note.ActualWidth == 200,
+                $"the minimum editing note keeps its full 200 by 160 body and adds a complete toolbar above and below ({editHeight}px)");
             var row = (Paragraph)editor.Document.Blocks.FirstBlock;
             var run = row.Inlines.OfType<Run>().First();
+            var moreLines = new Span();
+            for (int i = 0; i < 5; i++)
+            {
+                moreLines.Inlines.Add(new LineBreak());
+                moreLines.Inlines.Add(new Run("追加一行"));
+            }
+            row.Inlines.Add(moreLines);
+            Settle();
+            Fits("six lines fit in the editing window with no scrollbar");
+            Assert(Pixels() == editHeight, "six lines still fit inside the minimum body with both bars fully expanded");
+            font.SelectedItem = 200;
+            Settle();
+            var largeHeight = Pixels();
+            Assert(largeHeight > editHeight && Math.Abs(largeHeight - 2 * bars - (2 * editor.ExtentHeight + 14) * screen.Scale) <= 1.01 &&
+                   scroll.ScrollableHeight < .02 && thumb.Opacity == 0,
+                $"200% text refits a 200-wide editing note to its last line without a scrollbar ({largeHeight}px)");
+            Invoke(note, "FinishEditing");
+            Settle();
+            Assert(Pixels() == largeHeight - 2 * bars, "large reading text retains the full travel of both toolbars");
+            font.SelectedItem = 100;
+            Settle();
+            Assert(Pixels() == minHeight && data.Height == minHeight / screen.Scale, "reading retracts both full bars to the 160-DIP body");
+            TestEditClick(note, editor, Settle);
+            row.Inlines.Remove(moreLines);
+            Settle();
+            Assert(Pixels() == editHeight, "removing the extra lines retains the minimum body and both editing bars");
+            note.Width = 320;
             run.Text = string.Concat(Enumerable.Repeat("需要换行的待办内容 ", 35));
             Settle();
             Fits("typing grows the note to fit all of the wrapped lines");
             var wideHeight = Pixels();
-            note.Width = 220;
+            note.Width = 170;
             Settle();
             Fits("narrowing the note refits the lines at the new width");
-            Assert(Pixels() > wideHeight, "narrower wrapping increases the physical note height");
+            Assert(Math.Abs(note.ActualWidth - 200) < .01 && Pixels() > wideHeight,
+                "resizing stops at the 200-DIP width and refits the wrapped lines");
             run.Text = "短";
             Settle();
             Fits("deleting text shrinks the editing window again");
@@ -241,6 +293,14 @@ internal static partial class Checks
             Assert(d.Bounds.Top == d.Work.Top && d.Bounds.Bottom == d.Work.Bottom && scroll.ScrollableHeight > 0 &&
                    thumb.Opacity == 1 && thumb.IsHitTestVisible,
                 "long text reaches exactly the usable monitor height before showing its editing scrollbar");
+            var longDocument = editor.Document;
+            font.SelectedItem = 75;
+            Settle();
+            Assert(Pixels() == d.Work.Bottom - d.Work.Top && scroll.ScrollableHeight > 0 && thumb.Opacity == 1 &&
+                   ReferenceEquals(editor.Document, longDocument),
+                "resizing 82,000 characters preserves the document and keeps scrolling within one screen");
+            font.SelectedItem = 100;
+            Settle();
             editor.ScrollToEnd();
             Settle();
             Assert(scroll.VerticalOffset > 0, "the overflowing editor can scroll down its document");
@@ -285,7 +345,7 @@ internal static partial class Checks
             // Measure the native rectangle and the glyph from before the first frame
             // through completion at each screen edge.
             d = DesktopIntegration.GetNoteDisplay(handle);
-            note.Top += (d.Work.Bottom - shortHeight - 2 - d.Bounds.Top) / d.Scale;
+            note.Top += (d.Work.Bottom - editHeight - 2 - d.Bounds.Top) / d.Scale;
             Settle();
             var p = run.ContentStart;
             double TextOnScreen() => editor.PointToScreen(p.GetCharacterRect(LogicalDirection.Forward).Location).Y;
@@ -295,7 +355,7 @@ internal static partial class Checks
                 foreach (var position in new[] { "bottom", "top", "middle" })
                 {
                     d = DesktopIntegration.GetNoteDisplay(handle);
-                    var wanted = position == "top" ? d.Work.Top : position == "bottom" ? d.Work.Bottom - shortHeight : (d.Work.Top + d.Work.Bottom) / 2;
+                    var wanted = position == "top" ? d.Work.Top : position == "bottom" ? d.Work.Bottom - editHeight : (d.Work.Top + d.Work.Bottom) / 2;
                     note.Top += (wanted - d.Bounds.Top) / d.Scale;
                     Settle();
                     var reading = DesktopIntegration.GetNoteDisplay(handle).Bounds;
@@ -367,11 +427,17 @@ internal static partial class Checks
                 var positioned = DesktopIntegration.GetNoteDisplay(new WindowInteropHelper(fresh).Handle);
                 var b = positioned.Bounds;
                 Assert(Math.Abs(b.Top + b.Bottom - 2 * center.Y) <= 1 && Math.Abs(b.Left + b.Right - 2 * center.X) <= 1 &&
-                       b.Bottom - b.Top < 120 * positioned.Scale,
-                    $"a new empty editing note uses its fitted rectangle to center on the requested point (height={b.Bottom - b.Top}px)");
+                       b.Bottom - b.Top == (int)Math.Ceiling(160 * positioned.Scale) + 2 * positioned.BarPixels,
+                    $"a new empty editing note centers its body and both external bars on the requested point (height={b.Bottom - b.Top}px)");
             }
             finally { fresh.DisposeWindow(); }
         }
-        finally { note.DisposeWindow(); }
+        finally
+        {
+            library.PrepareForShutdown();
+            note.DisposeWindow();
+            library.Close();
+            settingsDirectory.Delete(true);
+        }
     }
 }

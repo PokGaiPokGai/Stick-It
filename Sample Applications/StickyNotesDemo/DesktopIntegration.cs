@@ -106,10 +106,10 @@ public static class DesktopIntegration
         var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
         if (!GetMonitorInfo(monitor, ref info)) throw new Win32Exception();
         Marshal.ThrowExceptionForHR(GetDpiForMonitor(monitor, 0, out var dpiX, out var dpiY));
-        var width = Math.Min((int)Math.Round(window.Width * dpiX / 96), info.Work.Right - info.Work.Left);
+        var width = Math.Min((int)Math.Round(Math.Max(window.Width, window.MinWidth) * dpiX / 96), info.Work.Right - info.Work.Left);
         var display = new NoteDisplay(default, info.Work, dpiY / 96.0);
         var paperHeight = window.MeasurePaperHeight(width * 96.0 / dpiX, display.AvailablePaperHeight);
-        var bounds = CenteredBounds(point, info.Work, width, (int)Math.Ceiling(paperHeight * display.Scale) + 2 * display.BarPixels);
+        var bounds = CenteredBounds(point, info.Work, width, display.WindowHeight(paperHeight));
         var hwnd = new WindowInteropHelper(window).EnsureHandle();
         if (!SetWindowPos(hwnd, new IntPtr(-1), bounds.Left, bounds.Top, bounds.Right-bounds.Left, bounds.Bottom-bounds.Top, 0x10))
             throw new Win32Exception();
@@ -135,18 +135,20 @@ public static class DesktopIntegration
 
     internal readonly record struct NoteDisplay(Rect Bounds, Rect Work, double Scale)
     {
+        private const double MinimumPaperHeight = 160;
         internal double Width => (Bounds.Right - Bounds.Left) / Scale;
         internal int BarPixels => Math.Min((int)Math.Round(NoteChrome.BarHeight * Scale), (Work.Bottom - Work.Top - 1) / 2);
         internal double AvailablePaperHeight => (Work.Bottom - Work.Top - 2 * BarPixels) / Scale;
 
+        internal int WindowHeight(double paperHeight) => (int)Math.Min(Work.Bottom - Work.Top,
+            Math.Ceiling(Math.Max(MinimumPaperHeight, paperHeight) * Scale) + 2 * BarPixels);
+
         internal Rect FitWindow(double desiredHeight, int preferredTop)
         {
-            // Both modes share one paper rectangle. Even against a monitor edge,
-            // opening a toolbar never needs to push or scroll the document.
-            int space = BarPixels, topLimit = Work.Top + space, bottomLimit = Work.Bottom - space;
-            var height = (int)Math.Min(bottomLimit - topLimit, Math.Ceiling(desiredHeight * Scale));
-            var top = Math.Clamp(preferredTop, topLimit, bottomLimit - height);
-            return new Rect { Left = Bounds.Left, Right = Bounds.Right, Top = top - space, Bottom = top + height + space };
+            var height = WindowHeight(desiredHeight);
+            var bar = BarPixels;
+            var top = Math.Clamp(preferredTop, Work.Top + bar, Work.Bottom - height + bar) - bar;
+            return new Rect { Left = Bounds.Left, Right = Bounds.Right, Top = top, Bottom = top + height };
         }
     }
 

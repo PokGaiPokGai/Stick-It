@@ -16,7 +16,7 @@ namespace StickyNotesDemo;
 public partial class MainWindow : Window
 {
     private readonly NoteStore store;
-    private readonly NoteSettings settings;
+    private NoteSettings settings;
     private readonly List<Window2> notes=new();
     private readonly DispatcherTimer saveTimer;
     private readonly GameMouseMonitor gameMouse;
@@ -39,6 +39,10 @@ public partial class MainWindow : Window
         gameMouse = new GameMouseMonitor(SetNotesMousePassthrough, MouseModeFailed);
         InitializeComponent();
         RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
+        FontSizePicker.ItemsSource = NoteSettings.FontPercentages;
+        FontSizePicker.SelectedItem = settings.FontSizePercent;
+        FontSizePicker.SelectionChanged += FontSizeSelected;
+        ApplyFontSize();
     }
     public void Start(bool atSignIn = false)
     {
@@ -91,6 +95,7 @@ public partial class MainWindow : Window
     private Window2 AddNote(NoteData data)
     {
         var note=new Window2(data); notes.Add(note);
+        note.SetTextScale((ScaleTransform)Resources["DocumentTextScale"]);
         note.Changed+=QueueSave;
         note.CardChanged+=RefreshVisibleList;
         note.DeleteRequested+=()=>DeleteNote(note);
@@ -117,16 +122,41 @@ public partial class MainWindow : Window
     private void MouseModeClick(object sender, RoutedEventArgs e) => SetMouseMode(AutoMouseMode.IsChecked == true);
     private void RandomNoteColorClick(object sender, RoutedEventArgs e)
     {
-        var updated = new NoteSettings { RandomNewNoteColor = RandomNoteColor.IsChecked == true };
+        if (!TrySaveSettings(settings with { RandomNewNoteColor = RandomNoteColor.IsChecked == true }))
+            RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
+    }
+
+    private void FontSizeSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (FontSizePicker.SelectedItem is not int percent || percent == settings.FontSizePercent) return;
+        if (TrySaveSettings(settings with { FontSizePercent = percent })) ApplyFontSize();
+        else FontSizePicker.SelectedItem = settings.FontSizePercent;
+    }
+
+    private void ApplyFontSize()
+    {
+        var scale = settings.FontSizePercent / 100.0;
+        var transform = new ScaleTransform(scale, scale);
+        transform.Freeze();
+        Resources["DocumentTextScale"] = transform;
+        FontSize = SystemFonts.MessageFontSize * scale;
+        foreach (var size in new[] { 9, 12, 13, 14, 17, 22 })
+            Resources["FontSize" + size] = size * scale;
+        foreach (var note in notes) note.SetTextScale(transform);
+    }
+
+    private bool TrySaveSettings(NoteSettings updated)
+    {
         try
         {
             store.SaveSettings(updated);
-            settings.RandomNewNoteColor = updated.RandomNewNoteColor;
+            settings = updated;
+            return true;
         }
         catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
         {
-            RandomNoteColor.IsChecked = settings.RandomNewNoteColor;
             Report("设置未能保存：" + error.Message);
+            return false;
         }
     }
     private void CreateNote()
@@ -162,7 +192,7 @@ public partial class MainWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
-        if (!e.Handled && e.Key == Key.Escape && SettingsPage.Visibility == Visibility.Visible)
+        if (!e.Handled && e.Key == Key.Escape && SettingsPage.Visibility == Visibility.Visible && !FontSizePicker.IsDropDownOpen)
         {
             ShowSettings(false);
             e.Handled = true;
